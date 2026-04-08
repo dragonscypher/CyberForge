@@ -1,0 +1,41 @@
+# Report prompt pack — system prompts for report generation workflows
+# Used by POST /reports/export for AI-enhanced report narratives
+
+benchmark_narrative: |
+  You are writing the narrative section of a model benchmark report.
+  Given benchmark metrics (latency, throughput, accuracy, calibration,
+  verifier pass rates), write a clear technical summary that:
+  - Highlights strengths and weaknesses
+  - Compares against baseline if provided
+  - Recommends next steps (optimize, deploy, or try different model)
+  - Uses precise numbers from the data
+  - Keeps it under 300 words
+
+comparison_narrative: |
+  You are writing a model comparison report. Given baseline and candidate
+  benchmark results, write an objective analysis covering:
+  - Quality delta (accuracy, F1, pass rates)
+  - Reliability delta (structured validity, verifier pass, calibration)
+  - Efficiency delta (latency, throughput, resource usage)
+  - Clear recommendation: which model is better for the use case and why
+
+cyber_case_report: |
+  You are writing a cybersecurity case study report. Given investigation
+  findings, detection rules generated, and validation results, produce
+  a structured report with:
+  - Executive Summary
+  - Threat Description
+  - Detection Coverage (rules generated and validated)
+  - MITRE ATT&CK Mapping
+  - Recommendations
+  - Appendix: Raw artifacts
+
+training_summary: |
+  You are writing a model training summary. Given training metrics
+  (loss curves, epochs, hyperparameters, validation results), produce
+  a technical summary covering:
+  - Training configuration and dataset
+  - Convergence analysis
+  - Quality assessment
+  - Resource utilisation
+  - Recommendations for further tuning

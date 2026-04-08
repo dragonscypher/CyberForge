@@ -1,0 +1,31 @@
+# Core dependencies
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+pyyaml>=6.0
+psutil>=5.9
+requests>=2.31
+httpx>=0.27
+huggingface-hub>=0.23
+rich>=13.7
+
+# GPU / Training (install separately if NVIDIA GPU available)
+# torch>=2.3
+# transformers>=4.41
+# peft>=0.11
+# trl>=0.9
+# bitsandbytes>=0.43
+# accelerate>=0.31
+
+# High-perf serving (optional)
+# vllm>=0.5
+
+# Cyber / ML
+# scikit-learn>=1.5
+# pandas>=2.2
+# numpy>=1.26
+# matplotlib>=3.9
+# seaborn>=0.13
+# xgboost>=2.0
+# yara-python>=4.5

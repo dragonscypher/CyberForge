@@ -1,0 +1,214 @@
+# CyberForge — Seed Model Registry
+# Each entry describes a model the system can recommend, download, or discover locally.
+
+models:
+  # ── General tier ──────────────────────────────────────────────
+  - id: qwen2.5-7b-instruct
+    display_name: "Qwen 2.5 7B Instruct"
+    family: qwen2.5
+    task_modes: [general, cyber]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-7B-Instruct"
+    ollama_tag: "qwen2.5:7b-instruct"
+    format: safetensors
+    params: 7
+    context_length: 131072
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0, fp16]
+    min_vram: 5000
+    min_ram: 10000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: true
+    cyber_role: analyst
+    notes: "Strong general-purpose model with 128 K context. Default general pick."
+
+  - id: qwen2.5-3b-instruct
+    display_name: "Qwen 2.5 3B Instruct"
+    family: qwen2.5
+    task_modes: [general]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-3B-Instruct"
+    ollama_tag: "qwen2.5:3b-instruct"
+    format: safetensors
+    params: 3
+    context_length: 32768
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0, fp16]
+    min_vram: 2500
+    min_ram: 6000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: false
+    cyber_role: null
+    notes: "Lightweight fallback for low-VRAM systems."
+
+  - id: qwen2.5-1.5b-instruct
+    display_name: "Qwen 2.5 1.5B Instruct"
+    family: qwen2.5
+    task_modes: [general]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-1.5B-Instruct"
+    ollama_tag: "qwen2.5:1.5b-instruct"
+    format: safetensors
+    params: 1.5
+    context_length: 32768
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0]
+    min_vram: 1500
+    min_ram: 4000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: false
+    cyber_role: null
+    notes: "Tiny model for CPU-only or very constrained systems."
+
+  # ── Coding tier ───────────────────────────────────────────────
+  - id: qwen2.5-coder-7b-instruct
+    display_name: "Qwen 2.5 Coder 7B Instruct"
+    family: qwen2.5-coder
+    task_modes: [coding, cyber]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-Coder-7B-Instruct"
+    ollama_tag: "qwen2.5-coder:7b-instruct"
+    format: safetensors
+    params: 7
+    context_length: 131072
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0, fp16]
+    min_vram: 5000
+    min_ram: 10000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: true
+    cyber_role: coder
+    notes: "Default coding model. Also useful for Sigma/YARA/KQL generation."
+
+  - id: qwen2.5-coder-3b-instruct
+    display_name: "Qwen 2.5 Coder 3B Instruct"
+    family: qwen2.5-coder
+    task_modes: [coding]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-Coder-3B-Instruct"
+    ollama_tag: "qwen2.5-coder:3b-instruct"
+    format: safetensors
+    params: 3
+    context_length: 32768
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0]
+    min_vram: 2500
+    min_ram: 6000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: false
+    cyber_role: null
+    notes: "Lightweight coding fallback."
+
+  # ── Guardrail / Judge tier ────────────────────────────────────
+  - id: granite-guardian-3.2-3b
+    display_name: "Granite Guardian 3.2 3B"
+    family: granite-guardian
+    task_modes: [guardrail]
+    source: huggingface
+    hf_repo: "ibm-granite/granite-guardian-3.2-3b"
+    ollama_tag: null
+    format: safetensors
+    params: 3
+    context_length: 8192
+    license: apache-2.0
+    recommended_backend: transformers
+    quant_options: [fp16, q8_0]
+    min_vram: 3000
+    min_ram: 8000
+    supports_lora: false
+    supports_qlora: false
+    supports_ollama_import: false
+    supports_vllm: true
+    supports_tensorrt_llm: false
+    cyber_role: guardrail
+    notes: "Risk detection sidecar for prompts/responses. Good for factuality & jailbreak checks."
+
+  - id: granite-guardian-3.2-5b
+    display_name: "Granite Guardian 3.2 5B"
+    family: granite-guardian
+    task_modes: [guardrail]
+    source: huggingface
+    hf_repo: "ibm-granite/granite-guardian-3.2-5b"
+    ollama_tag: null
+    format: safetensors
+    params: 5
+    context_length: 8192
+    license: apache-2.0
+    recommended_backend: transformers
+    quant_options: [fp16, q8_0]
+    min_vram: 5000
+    min_ram: 12000
+    supports_lora: false
+    supports_qlora: false
+    supports_ollama_import: false
+    supports_vllm: true
+    supports_tensorrt_llm: false
+    cyber_role: guardrail
+    notes: "Larger guardrail for more nuanced risk classification."
+
+  # ── GPU-only larger tier (optional) ───────────────────────────
+  - id: qwen2.5-14b-instruct
+    display_name: "Qwen 2.5 14B Instruct"
+    family: qwen2.5
+    task_modes: [general, coding, cyber]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-14B-Instruct"
+    ollama_tag: "qwen2.5:14b-instruct"
+    format: safetensors
+    params: 14
+    context_length: 131072
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0, fp16]
+    min_vram: 9000
+    min_ram: 20000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: true
+    cyber_role: analyst
+    notes: "High-quality option for systems with >= 12 GB VRAM."
+
+  - id: qwen2.5-coder-14b-instruct
+    display_name: "Qwen 2.5 Coder 14B Instruct"
+    family: qwen2.5-coder
+    task_modes: [coding, cyber]
+    source: huggingface
+    hf_repo: "Qwen/Qwen2.5-Coder-14B-Instruct"
+    ollama_tag: "qwen2.5-coder:14b-instruct"
+    format: safetensors
+    params: 14
+    context_length: 131072
+    license: apache-2.0
+    recommended_backend: ollama
+    quant_options: [q4_K_M, q8_0, fp16]
+    min_vram: 9000
+    min_ram: 20000
+    supports_lora: true
+    supports_qlora: true
+    supports_ollama_import: true
+    supports_vllm: true
+    supports_tensorrt_llm: true
+    cyber_role: coder
+    notes: "Premium coding model for >=12 GB VRAM."
