@@ -1,0 +1,91 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+*.whl
+
+# ── Virtual environments ──
+.venv/
+venv/
+ENV/
+
+# ── IDE / Editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS junk ──
+Thumbs.db
+Desktop.ini
+.DS_Store
+.Spotlight-V100
+.Trashes
+
+# ── Secrets & local config ──
+.env
+data/config.yaml
+*.keyring
+*.secret
+
+# ── Data & artifacts ──
+data/cache/
+data/saved_models/adapters/
+data/cyberforge.db
+*.db-journal
+
+# ── Downloaded models (never commit) ──
+*.gguf
+*.bin
+*.safetensors
+*.onnx
+*.pt
+*.pth
+
+# ── ML pickle models ──
+*.pkl
+
+# ── Reports (generated at runtime) ──
+reports/*.json
+reports/*.html
+reports/e2e_test/
+reports/quant_test/
+
+# ── Benchmark & test outputs ──
+.pytest_cache/
+
+# ── Heavy datasets (loaders stay, raw data excluded) ──
+KDD*.txt
+KDD*.zip
+bot1/
+*.csv.gz
+
+# ── Notebooks with local outputs ──
+compsecurity.ipynb
+test.ipynb
+
+# ── Videos ──
+*.mp4
+
+# ── Alembic auto-generated ──
+alembic/versions/__pycache__/
+
+# ── Misc test / scratch scripts ──
+test.py
+test_e2e.py
+test_e2e_reports.py
+test_ids.py
+test_quantization.py
+test_regression.py
+smoke_test_full.py
+demo_e2e.py
+_flow_test.py
+_reproduce.py
+_verify_unified.py
+STATUS_REPORT.md
+plan.md
