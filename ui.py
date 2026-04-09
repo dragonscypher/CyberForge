@@ -163,7 +163,7 @@ _NAV_LINKS = [
     ("/models", "Models"),
     ("/recommend", "Recommend"),
     ("/bench", "Bench"),
-    ("/optimize", "Optimize"),
+    ("/optimize", "Optimize &#128274;"),
     ("/cache", "Cache"),
     ("/cyber", "Cyber"),
     ("/jobs", "Jobs"),
@@ -189,6 +189,7 @@ function selectMode(el, mode) {
     document.querySelectorAll('.mode-card').forEach(c=>c.classList.remove('selected'));
     el.classList.add('selected');
     window._selectedMode = mode;
+    sessionStorage.setItem('cf_selected_mode', mode);
 }
 function toggleModelSelect(el) {
     const cb = el.querySelector('input[type=checkbox]');
@@ -437,10 +438,48 @@ async def action_chat(request: Request):
             return JSONResponse({"_error": msg})
 
 
+@app.post("/action/ollama-delete")
+async def action_ollama_delete(request: Request):
+    body = await request.json()
+    name = body.get("model_name", "")
+    if not name:
+        return JSONResponse({"deleted": False, "error": "No model_name provided"})
+    try:
+        ollama = getattr(app.state, "ollama", None) or getattr(_api_app.state, "ollama", None)
+        if ollama is None:
+            return JSONResponse({"deleted": False, "error": "Ollama client not available"})
+        ok = await ollama.delete(name)
+        return JSONResponse({"deleted": ok, "model_name": name})
+    except Exception as e:
+        return JSONResponse({"deleted": False, "error": str(e)})
+
 @app.post("/action/ollama-pull")
 async def action_ollama_pull(request: Request):
     body = await request.json()
     return JSONResponse(await _api("/api/serve/ollama/pull", method="POST", json=body))
+
+@app.get("/action/ollama-library-search")
+async def action_ollama_library_search(q: str = ""):
+    """Search the Ollama model library at ollama.com for matching models."""
+    import re as _re
+    if not q or len(q) < 2:
+        return JSONResponse({"results": []})
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://ollama.com/search", params={"q": q})
+            if resp.status_code != 200:
+                return JSONResponse({"results": [], "error": "Ollama library search unavailable"})
+            # Extract model names from library links: /library/modelname
+            matches = _re.findall(r'href="/library/([^"]+)"', resp.text)
+            seen = set()
+            results = []
+            for m in matches:
+                if m not in seen:
+                    seen.add(m)
+                    results.append(m)
+            return JSONResponse({"results": results[:10]})
+    except Exception as exc:
+        return JSONResponse({"results": [], "error": str(exc)})
 
 
 @app.post("/action/model-fit")
@@ -588,9 +627,9 @@ async def dashboard():
   <div class="card"><a href="/models">&#128230; Model Registry</a> — browse models</div>
   <div class="card"><a href="/recommend">&#127775; Recommendations</a> — model picks</div>
   <div class="card"><a href="/bench">&#9201; Benchmarks</a> — run & compare tests</div>
-  <div class="card"><a href="/optimize">&#128640; Optimize</a> — quantize & compress</div>
+  <div class="card"><a href="/optimize">&#128640; Optimize <span style="font-size:.75rem;background:#6e40c9;color:#fff;padding:2px 6px;border-radius:4px;">Advanced</span></a> — all backends (expert)</div>
   <div class="card"><a href="/cache">&#128451; Cache</a> — manage storage</div>
-  <div class="card"><a href="/cyber">&#128737; Cyber Lab</a> — validate Sigma/YARA</div>
+  <div class="card"><a href="/cyber">&#128737; Cyber Lab</a> — validate Sigma/YARA/Suricata</div>
   <div class="card"><a href="/jobs">&#9881; Jobs</a> — background queue</div>
 </div>"""
     return _page("Dashboard", body, "/")
@@ -627,10 +666,9 @@ async def workflow_page():
   <span class="step-pill" id="sp2">2. Mode</span>
   <span class="step-pill" id="sp3">3. Test</span>
   <span class="step-pill" id="sp4">4. Models</span>
-  <span class="step-pill" id="sp5">5. Cache</span>
-  <span class="step-pill" id="sp6">6. Overdrive</span>
-  <span class="step-pill" id="sp7">7. Benchmark</span>
-  <span class="step-pill" id="sp8">8. Results</span>
+  <span class="step-pill" id="sp5">5. Optimize</span>
+  <span class="step-pill" id="sp6">6. Benchmark</span>
+  <span class="step-pill" id="sp7">7. Results</span>
 </div>
 
 <!-- STEP 1: Hardware -->
@@ -638,6 +676,7 @@ async def workflow_page():
   <h2>Step 1 — Hardware Detected</h2>
   {hw_html}
   <p style="color:var(--green);margin-top:.75rem;">&#10003; Hardware profiled automatically.</p>
+  <button class="btn btn-primary" onclick="setStep(2)" style="margin-top:.75rem;">Continue &rarr; Select Task Mode</button>
 </div>
 
 <!-- STEP 2: Mode Selection -->
@@ -649,6 +688,12 @@ async def workflow_page():
     <div class="mode-card" onclick="selectMode(this,'coding')"><div class="icon">&#128187;</div><div class="title">Coding</div><div class="desc">Code generation &amp; review</div></div>
     <div class="mode-card" onclick="selectMode(this,'cyber')"><div class="icon">&#128737;</div><div class="title">Cyber Security</div><div class="desc">Sigma/YARA, threat analysis</div></div>
     <div class="mode-card" onclick="selectMode(this,'ids')"><div class="icon">&#128270;</div><div class="title">IDS / Detection</div><div class="desc">Intrusion detection systems</div></div>
+  </div>
+  <!-- Dataset / Benchmark info per mode -->
+  <div id="mode-dataset-info" class="card" style="border-color:var(--border);margin-top:.75rem;display:none;"></div>
+  <div id="mode-continue" style="display:none;margin-top:.75rem;">
+    <button class="btn btn-primary" onclick="setStep(3)">Continue &rarr; Run Tests</button>
+    <button class="btn btn-outline" onclick="setStep(4)" style="margin-left:.5rem;">Skip Tests &rarr; Get Recommendations</button>
   </div>
 </div>
 
@@ -672,21 +717,10 @@ async def workflow_page():
   <div class="result-box" id="rec-result"></div>
 </div>
 
-<!-- STEP 5: Cache Management -->
-<div class="card" id="step5">
-  <h2>Step 5 — Cache Management</h2>
-  <p style="color:#8b949e;">Free up space by removing unused cached models and artifacts.</p>
-  <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0;">
-    <button class="btn btn-red" onclick="cleanupCache()">&#128465; Cleanup Volatile Cache</button>
-    <button class="btn btn-outline" onclick="cleanupStale()">&#128336; Remove Stale (&gt;24h)</button>
-  </div>
-  <div class="result-box" id="cache-result"></div>
-</div>
-
-<!-- STEP 6: Overdrive — Quantize & Prune -->
-<div class="card" id="step6" style="border-color:var(--purple);">
-  <h2 style="color:var(--purple);">Step 6 — Overdrive: Quantize &amp; Optimize</h2>
-  <p style="color:#8b949e;">Apply cutting-edge compression techniques to maximize performance on your hardware.</p>
+<!-- STEP 5: Optimize & Quantize -->
+<div class="card" id="step5" style="border-color:var(--purple);">
+  <h2 style="color:var(--purple);">Step 5 — Quantize &amp; Optimize</h2>
+  <p style="color:#8b949e;">Apply GGUF quantization to compress your model for local hardware.</p>
   <div id="od-env-status" class="card" style="background:#1a1025;border-color:var(--border);"><span class="spinner"></span> Checking quantization backends...</div>
 
   <!-- Quick Mode Preset -->
@@ -708,12 +742,7 @@ async def workflow_page():
     </div>
   </div>
 
-  <!-- HF Token (for non-Ollama backends) -->
-  <div class="card" id="hf-token-section" style="background:#1a1025;border-color:var(--border);display:none;">
-    <label>&#128273; HuggingFace Token (optional &mdash; needed for gated/private models)</label>
-    <input type="text" id="hf-token" placeholder="hf_xxxxx..." style="margin-top:.25rem;" />
-    <p style="font-size:.8rem;color:#8b949e;margin-top:.25rem;">Public models work without a token. Gated models (e.g. Llama, Mistral) require one. Get yours at <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a>. Token is sent to your local API server only.</p>
-  </div>
+
 
   <div class="grid" style="margin:1rem 0;">
     <div class="form-group">
@@ -725,10 +754,6 @@ async def workflow_page():
       <label>Quantization Backend</label>
       <select id="od-backend" onchange="onBackendChange()">
         <option value="ollama">Ollama GGUF (recommended — works locally)</option>
-        <option value="bnb_4bit">bitsandbytes NF4 (needs PyTorch CUDA)</option>
-        <option value="bnb_8bit">bitsandbytes INT8 (needs PyTorch CUDA)</option>
-        <option value="awq">AWQ — Activation-aware (needs PyTorch CUDA)</option>
-        <option value="gptq">GPTQ — Post-Training (needs PyTorch CUDA)</option>
       </select>
     </div>
     <div class="form-group" id="gguf-level-group">
@@ -743,59 +768,126 @@ async def workflow_page():
     </div>
   </div>
 
-  <div class="card" style="background:#1a1025;border-color:var(--purple);">
-    <h3 style="color:var(--purple);">&#128218; How It Works</h3>
-    <table>
-      <tr><th>Method</th><th>Technique</th><th>Best For</th></tr>
-      <tr><td><strong>GGUF</strong></td><td>K-quant mixed precision (llama.cpp)</td><td>CPU+GPU inference, Ollama</td></tr>
-      <tr><td><strong>AWQ</strong></td><td>Activation-aware channel scaling</td><td>GPU inference, best generalization</td></tr>
-      <tr><td><strong>GPTQ</strong></td><td>Hessian-based post-training quantization</td><td>GPU inference, fast one-shot</td></tr>
-      <tr><td><strong>NF4</strong></td><td>4-bit NormalFloat + double quantization</td><td>QLoRA fine-tuning, memory-constrained</td></tr>
-    </table>
-    <p style="color:#8b949e;font-size:.8rem;margin-top:.5rem;"><strong>Pruning</strong> (SparseGPT/Wanda) and <strong>Knowledge Distillation</strong> are available on the <a href="/optimize">full Optimize page</a>.</p>
-  </div>
-
   <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0;">
     <button class="btn btn-purple" onclick="runQuantize()">&#128640; Quantize Model</button>
     <button class="btn btn-outline" onclick="runQuantCompare()" style="border-color:var(--purple);color:var(--purple);">&#128200; Compare All Methods</button>
-    <a href="/optimize" class="btn btn-outline" style="text-decoration:none;">&#9881; Pruning &amp; Distillation &rarr;</a>
   </div>
   <div class="result-box" id="quant-result"></div>
+
+  <!-- ── Optimization: Quantize (Ollama GGUF) ── -->
+
+  <!-- Quant info (shown by default) -->
+  <div id="opt-panel-quant" class="card" style="background:#1a1025;border-color:var(--purple);">
+    <h3 style="color:var(--purple);">&#128218; GGUF Quantization</h3>
+    <p style="color:#8b949e;font-size:.85rem;">Ollama GGUF uses K-quant mixed-precision via llama.cpp &mdash; ideal for CPU+GPU inference on local hardware.</p>
+  </div>
+
+  <!-- Optional: Cache Cleanup -->
+  <details style="margin-top:1rem;">
+    <summary style="color:#8b949e;cursor:pointer;font-size:.85rem;">&#128465; Cache Management (optional)</summary>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:.75rem 0;">
+      <button class="btn btn-red" onclick="cleanupCache()" style="font-size:.8rem;">&#128465; Cleanup Volatile Cache</button>
+      <button class="btn btn-outline" onclick="cleanupStale()" style="font-size:.8rem;">&#128336; Remove Stale (&gt;24h)</button>
+    </div>
+    <div class="result-box" id="cache-result"></div>
+  </details>
+
 </div>
 
-<!-- STEP 7: Benchmark Comparison -->
-<div class="card" id="step7">
-  <h2>Step 7 — Benchmark: Original vs Optimized</h2>
-  <p style="color:#8b949e;">Run task-specific benchmarks to measure the impact of optimization.</p>
-  <div class="grid" style="margin:1rem 0;">
-    <div class="form-group">
-      <label>Original Model ID</label>
-      <input type="text" id="bench-orig" placeholder="e.g. qwen2.5:7b" />
+<!-- STEP 6: Benchmark Comparison -->
+<div class="card" id="step6">
+  <h2>Step 6 — Benchmark &amp; Compare</h2>
+  <p style="color:#8b949e;">Benchmark the original and optimized models, then compare the results.</p>
+
+  <!-- Compare Mode Selector -->
+  <div style="display:flex;gap:.5rem;margin:1rem 0;">
+    <button class="btn btn-primary" id="cmpmode-origopt" onclick="setBenchMode('origopt')" style="flex:1;">&#128260; Original vs Optimized</button>
+  </div>
+  <details style="margin-bottom:.5rem;">
+    <summary style="color:#8b949e;cursor:pointer;font-size:.85rem;">&#128295; Advanced Benchmark Modes</summary>
+    <div style="display:flex;gap:.5rem;margin:.5rem 0;">
+      <button class="btn btn-outline" id="cmpmode-modmod" onclick="setBenchMode('modmod')" style="flex:1;">&#128257; Model vs Model</button>
+      <button class="btn btn-outline" id="cmpmode-baseline" onclick="setBenchMode('baseline')" style="flex:1;">&#127919; Classical Baseline</button>
     </div>
-    <div class="form-group">
-      <label>Optimized Model ID</label>
-      <input type="text" id="bench-opt" placeholder="e.g. qwen2.5:7b-q4_k_m" />
+  </details>
+
+  <!-- Mode: Original vs Optimized -->
+  <div id="bench-panel-origopt">
+    <p style="color:#8b949e;font-size:.9rem;margin-bottom:.5rem;">Compare the <em>same</em> base model before and after quantization.</p>
+    <div class="grid" style="margin:1rem 0;">
+      <div class="form-group">
+        <label>Original Model ID</label>
+        <input type="text" id="bench-orig" placeholder="e.g. qwen2.5:7b" />
+      </div>
+      <div class="form-group">
+        <label>Optimized Model ID</label>
+        <input type="text" id="bench-opt" placeholder="e.g. qwen2.5:7b-q4_k_m" />
+      </div>
+      <div class="form-group">
+        <label>Task Mode</label>
+        <select id="bench-mode">
+          <option value="general">General</option>
+          <option value="coding">Coding</option>
+          <option value="cyber">Cyber Security</option>
+        </select>
+      </div>
     </div>
-    <div class="form-group">
-      <label>Task Mode</label>
-      <select id="bench-mode">
-        <option value="general">General</option>
-        <option value="coding">Coding</option>
-        <option value="cyber">Cyber Security</option>
-      </select>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0;">
+      <button class="btn btn-primary" onclick="runBenchmark('original')">&#9654; Benchmark Original</button>
+      <button class="btn btn-green" onclick="runBenchmark('optimized')">&#9654; Benchmark Optimized</button>
+      <button class="btn btn-outline" onclick="compareBenchmarks()">&#128200; Compare Results</button>
     </div>
   </div>
-  <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0;">
-    <button class="btn btn-primary" onclick="runBenchmark('original')">&#9654; Benchmark Original</button>
-    <button class="btn btn-green" onclick="runBenchmark('optimized')">&#9654; Benchmark Optimized</button>
-    <button class="btn btn-outline" onclick="compareBenchmarks()">&#128200; Compare Results</button>
+
+  <!-- Mode: Model vs Model -->
+  <div id="bench-panel-modmod" style="display:none;">
+    <p style="color:#8b949e;font-size:.9rem;margin-bottom:.5rem;">Compare any two local models side-by-side. They do <strong>not</strong> need to share a base model.</p>
+    <div class="grid" style="margin:1rem 0;">
+      <div class="form-group">
+        <label>Left Model (A)</label>
+        <input type="text" id="bench-left" placeholder="e.g. qwen2.5:7b" />
+      </div>
+      <div class="form-group">
+        <label>Right Model (B)</label>
+        <input type="text" id="bench-right" placeholder="e.g. mistral:7b" />
+      </div>
+      <div class="form-group">
+        <label>Task Mode</label>
+        <select id="bench-mode2">
+          <option value="general">General</option>
+          <option value="coding">Coding</option>
+          <option value="cyber">Cyber Security</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin:1rem 0;">
+      <button class="btn btn-primary" onclick="runBenchmarkMM('left')">&#9654; Benchmark Left (A)</button>
+      <button class="btn btn-green" onclick="runBenchmarkMM('right')">&#9654; Benchmark Right (B)</button>
+      <button class="btn btn-outline" onclick="compareBenchmarksMM()">&#128200; Compare A vs B</button>
+    </div>
   </div>
+
+  <!-- Mode: Classical Baseline -->
+  <div id="bench-panel-baseline" style="display:none;">
+    <p style="color:#8b949e;font-size:.9rem;margin-bottom:.5rem;">Compare a dedicated classical / structured baseline against an LLM for a given task mode.</p>
+    <div class="card" style="border-color:var(--purple);margin:1rem 0;">
+      <h3 style="color:var(--purple);">Available Classical Baselines</h3>
+      <table><thead><tr><th>Mode</th><th>Baseline</th><th>Status</th></tr></thead><tbody>
+        <tr><td>Cyber / IDS</td><td>NSL-KDD Random Forest classifier</td><td style="color:var(--green);">Available (see IDS Quick Benchmark)</td></tr>
+        <tr><td>Coding</td><td>No classical baseline</td><td style="color:#8b949e;">LLMs are the baseline for code generation</td></tr>
+        <tr><td>General</td><td>No classical baseline</td><td style="color:#8b949e;">LLMs are the baseline for general tasks</td></tr>
+      </tbody></table>
+      <p style="color:#8b949e;margin-top:.75rem;font-size:.85rem;">For <strong>Cyber / IDS</strong>: run the IDS Quick Benchmark on the <a href="/bench">Bench page</a>, then benchmark an LLM in cyber mode and compare the results.
+      For other modes, use "Model vs Model" to compare two LLMs directly.</p>
+    </div>
+  </div>
+
   <div class="result-box" id="bench-result"></div>
 </div>
 
-<!-- STEP 8: Final Results -->
-<div class="card" id="step8" style="border-color:var(--green);">
-  <h2 style="color:var(--green);">Step 8 — Final Recommendation</h2>
+<!-- STEP 7: Final Results -->
+<div class="card" id="step7" style="border-color:var(--green);">
+  <h2 style="color:var(--green);">Step 7 — Final Recommendation</h2>
   <p style="color:#8b949e;">Based on your hardware, task mode, and benchmark results, here's the final analysis.</p>
   <div class="result-box" id="final-result"></div>
   <button class="btn btn-green" onclick="generateFinalReport()">&#128203; Generate Final Report</button>
@@ -806,15 +898,113 @@ async def workflow_page():
     workflow_js = """
 window._selectedMode = 'general';
 window._benchCards = {};
+window._optimizedModel = '';
 window._selectedOllamaTag = '';
 window._selectedHfRepo = '';
 
-function setStep(n) {
-    for (let i = 1; i <= 8; i++) {
+// ── Dataset info per mode ──
+const _modeDatasets = {
+    general: {
+        type: 'Prompt Suite',
+        label: 'Prompt-based benchmark (no external dataset)',
+        items: [
+            {name: 'JSON Summarization', desc: 'Asks the model to summarize a concept and reply in valid JSON. Tests structured output + knowledge.'},
+            {name: 'Latency Explanation', desc: 'One-sentence explanation prompt. Tests conciseness and relevance.'}
+        ],
+        note: 'General mode uses built-in prompt suites, not dataset files. This is an LLM-native benchmark.'
+    },
+    coding: {
+        type: 'Prompt Suite',
+        label: 'Prompt-based benchmark (no external dataset)',
+        items: [
+            {name: 'Python Code Generation', desc: 'Asks for a function (add_numbers). Checks def/return keywords + correctness.'},
+            {name: 'JSON Type Hints', desc: 'Structured output prompt about Python type hints. Tests JSON validity.'}
+        ],
+        note: 'Coding mode uses built-in prompt suites, not dataset files. There is no HumanEval or MBPP dataset wired yet.'
+    },
+    cyber: {
+        type: 'Prompt Suite + Verifier',
+        label: 'Prompt-based benchmark with artifact verification',
+        items: [
+            {name: 'Sigma Rule Generation', desc: 'Asks the model to write a Sigma detection rule in YAML. Output is verified by SigmaVerifier.'},
+            {name: 'IOC JSON Extraction', desc: 'Structured threat intelligence extraction prompt. Tests JSON output validity.'}
+        ],
+        verifiers: ['SigmaVerifier — validates Sigma rule YAML syntax and required fields'],
+        usedIn: ['Cyber rule generation verification', 'Cyber copilot quality assessment', 'Model recommendation weighting (cyber score)'],
+        note: 'Cyber mode has real artifact verification (Sigma rules). IOC extraction is prompt-based.'
+    },
+    ids: {
+        type: 'Real Dataset',
+        label: 'NSL-KDD intrusion detection dataset',
+        items: [
+            {name: 'KDDTrain+.txt', desc: '125,973 labeled network connections (41 features). Train set for RF classifier.'},
+            {name: 'KDDTest+.txt', desc: '22,544 labeled connections. Evaluation set.'},
+            {name: 'KDDTest-21.txt', desc: 'Harder subset — 21 novel attack types not in training.'},
+            {name: 'KDDTrain+_20Percent.txt', desc: '20% random sample for quick experiments.'}
+        ],
+        classicalBaseline: 'Random Forest classifier (sklearn) — trains on KDDTrain+.txt, evaluates on KDDTest+.txt',
+        metrics: ['detection_rate', 'f1', 'roc_auc', 'pr_auc', 'false_positive_rate'],
+        usedIn: ['IDS benchmark (classical baseline)', 'Model recommendation weighting (IDS detection score)'],
+        note: 'IDS is the only mode backed by real datasets. The NSL-KDD files are in the workspace root.'
+    }
+};
+
+// Override selectMode to also show dataset info
+(function() {
+    const _origSelectMode = window.selectMode || function(){};
+    window.selectMode = function(el, mode) {
+        _origSelectMode(el, mode);
+        const info = _modeDatasets[mode];
+        const box = document.getElementById('mode-dataset-info');
+        if (!box || !info) return;
+        const typeColor = info.type === 'Real Dataset' ? 'var(--green)' : (info.type.includes('Verifier') ? 'var(--accent)' : '#8b949e');
+        let h = '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.5rem;">';
+        h += '<strong style="color:var(--accent);">Benchmark Data</strong>';
+        h += '<span class="badge" style="background:' + typeColor + '22;color:' + typeColor + ';border:1px solid ' + typeColor + '55;">' + info.type + '</span>';
+        h += '</div>';
+        h += '<p style="color:#8b949e;font-size:.85rem;margin-bottom:.5rem;">' + info.label + '</p>';
+        h += '<table><thead><tr><th>Source</th><th>Description</th></tr></thead><tbody>';
+        info.items.forEach(function(it) {
+            h += '<tr><td><strong>' + it.name + '</strong></td><td style="color:#8b949e;font-size:.85rem;">' + it.desc + '</td></tr>';
+        });
+        h += '</tbody></table>';
+        if (info.verifiers) {
+            h += '<div style="margin-top:.5rem;"><strong style="color:var(--accent);font-size:.85rem;">Verifiers:</strong> ';
+            h += info.verifiers.map(function(v) { return '<span class="badge badge-ok" style="font-size:.75rem;">' + v + '</span>'; }).join(' ');
+            h += '</div>';
+        }
+        if (info.classicalBaseline) {
+            h += '<div style="margin-top:.5rem;"><strong style="color:var(--green);font-size:.85rem;">Classical Baseline:</strong> <span style="color:#8b949e;font-size:.85rem;">' + info.classicalBaseline + '</span></div>';
+        }
+        if (info.metrics) {
+            h += '<div style="margin-top:.25rem;"><strong style="font-size:.85rem;color:var(--accent);">Metrics:</strong> ' + info.metrics.map(function(m) { return '<code style="font-size:.8rem;">' + m + '</code>'; }).join(', ') + '</div>';
+        }
+        if (info.usedIn) {
+            h += '<div style="margin-top:.5rem;"><strong style="font-size:.85rem;color:var(--purple);">Used In:</strong><ul style="margin:.25rem 0 0 1.25rem;font-size:.85rem;color:#8b949e;">';
+            info.usedIn.forEach(function(u) { h += '<li>' + u + '</li>'; });
+            h += '</ul></div>';
+        }
+        h += '<p style="color:#8b949e;font-size:.8rem;font-style:italic;margin-top:.5rem;">' + info.note + '</p>';
+        box.innerHTML = h;
+        box.style.display = '';
+        // Show continue buttons after mode selection
+        var cont = document.getElementById('mode-continue');
+        if (cont) cont.style.display = '';
+    };
+})();
+
+
+
+function setStep(n, noScroll) {
+    for (let i = 1; i <= 7; i++) {
         const sp = document.getElementById('sp' + i);
         if (i < n) sp.className = 'step-pill done';
         else if (i === n) sp.className = 'step-pill active';
         else sp.className = 'step-pill';
+    }
+    if (!noScroll) {
+        const el = document.getElementById('step' + n);
+        if (el) setTimeout(function(){ el.scrollIntoView({behavior:'smooth', block:'start'}); }, 80);
     }
 }
 
@@ -831,9 +1021,39 @@ function selectRecommendedModel(el) {
     // Store both tags
     window._selectedOllamaTag = el.dataset.ollama || '';
     window._selectedHfRepo = el.dataset.hf || '';
+    // Persist to sessionStorage so chat, bench, optimize pages pick it up
+    CyberForge.setSelected({
+        id: el.dataset.ollama || el.dataset.hf || el.dataset.name || '',
+        display_name: el.dataset.name || '',
+        ollama_tag: el.dataset.ollama || '',
+        hf_repo: el.dataset.hf || '',
+        mode: window._selectedMode || ''
+    });
     _syncModelField();
     // Fill benchmark fields
     document.getElementById('bench-orig').value = window._selectedOllamaTag || window._selectedHfRepo || '';
+    // Show action bar
+    const bar = document.getElementById('rec-actions');
+    if (bar) {
+        bar.style.display = '';
+        document.getElementById('rec-actions-name').textContent = el.dataset.name || el.dataset.ollama || el.dataset.hf || '';
+    }
+}
+function recUseInWorkflow() {
+    setStep(5);
+}
+async function recStartOptimize() {
+    if (!window._selectedOllamaTag && !window._selectedHfRepo) return;
+    setStep(5);
+    // Auto-start quantization after a brief visual pause
+    setTimeout(function() { runQuantize(); }, 400);
+}
+function recOpenChat() {
+    // Navigate to chat — sessionStorage already has the model
+    window.location.href = '/chat';
+}
+function recOpenBench() {
+    setStep(6);
 }
 
 function _syncModelField() {
@@ -842,17 +1062,98 @@ function _syncModelField() {
     const modelEl = document.getElementById('od-model');
     const hintEl = document.getElementById('od-model-hint');
     if (backend === 'ollama') {
-        modelEl.value = window._selectedOllamaTag || window._selectedHfRepo || '';
-        if (hintEl) hintEl.textContent = window._selectedOllamaTag ? 'Ollama tag: ' + window._selectedOllamaTag : '';
+        // Rule 5: NEVER send HF repo IDs to Ollama — only use ollama_tag
+        modelEl.value = window._selectedOllamaTag || '';
+        if (hintEl) {
+            if (window._selectedOllamaTag) {
+                hintEl.textContent = 'Ollama tag: ' + window._selectedOllamaTag;
+            } else if (window._selectedHfRepo) {
+                // Derive a search term from HF repo name
+                const parts = window._selectedHfRepo.split('/');
+                const raw = (parts[parts.length - 1] || '').toLowerCase()
+                    .replace(/[-_](instruct|chat|it|base|hf|gguf)$/g, '')
+                    .replace(/[-_](\d+\.?\d*[bm])$/g, '')
+                    .replace(/[-_](4k|8k|32k|128k|1m)$/g, '')
+                    .replace(/[-_.]+$/, '');
+                hintEl.innerHTML = '<span style="color:#f0883e;">\u26A0 No Ollama tag for this model.</span> '
+                    + '<br><input id="od-pull-name" style="margin-top:.3rem;padding:.25rem .5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:.8rem;width:180px;" placeholder="e.g. qwen2.5:3b" value="' + raw + '" /> '
+                    + '<button class="btn btn-sm btn-green" onclick="searchAndPullForWorkflow()" style="font-size:.75rem;padding:.2rem .6rem;vertical-align:middle;">\uD83D\uDD0D Search &amp; Pull</button>'
+                    + '<span id="od-search-result" style="display:block;margin-top:.3rem;font-size:.8rem;"></span>';
+            } else {
+                hintEl.textContent = '';
+            }
+        }
     } else {
         modelEl.value = window._selectedHfRepo || window._selectedOllamaTag || '';
         if (hintEl) hintEl.textContent = window._selectedHfRepo ? 'HF repo: ' + window._selectedHfRepo : (window._selectedOllamaTag ? 'No HF repo mapped — check registry.yaml' : '');
     }
 }
 
+async function searchAndPullForWorkflow() {
+    const nameInput = document.getElementById('od-pull-name');
+    const resultEl = document.getElementById('od-search-result');
+    const q = (nameInput ? nameInput.value.trim() : '').replace(/[^a-z0-9._:-]/gi, '');
+    if (!q) { resultEl.innerHTML = '<span style="color:#f85149">Enter a model name to search.</span>'; return; }
+    resultEl.innerHTML = '<span class="spinner"></span> Searching Ollama library\u2026';
+    try {
+        // First check if Ollama is running, auto-start if not
+        const status = await cyberGet('/action/ollama-status');
+        if (!status.available) {
+            resultEl.innerHTML = '<span class="spinner"></span> Ollama not running \u2014 starting\u2026';
+            const startRes = await cyberPost('/action/ollama-start');
+            if (!startRes.started) {
+                resultEl.innerHTML = '<span style="color:#f85149">Could not start Ollama: ' + (startRes.error || 'unknown') + '. Run <code>ollama serve</code> manually.</span>';
+                return;
+            }
+            await new Promise(r => setTimeout(r, 2000));
+        }
+        // Search the Ollama library for matching models
+        const search = await cyberGet('/action/ollama-library-search?q=' + encodeURIComponent(q));
+        const results = search.results || [];
+        if (results.length === 0) {
+            // No search results — try direct pull with the entered name
+            resultEl.innerHTML = '<span class="spinner"></span> No library matches \u2014 trying direct pull of <strong>' + q + '</strong>\u2026';
+            const pullRes = await cyberPost('/action/ollama-pull', {model_name: q});
+            if (pullRes._error || pullRes.error) {
+                resultEl.innerHTML = '<span style="color:#f85149">Pull failed: ' + (pullRes._error || pullRes.error) + '</span>';
+            } else {
+                window._selectedOllamaTag = q;
+                document.getElementById('od-model').value = q;
+                resultEl.innerHTML = '<span style="color:var(--green)">\u2713 Pulled <strong>' + q + '</strong>! Ready to quantize.</span>';
+            }
+            return;
+        }
+        // Show search results as clickable options
+        let html = '<strong>Matches:</strong> ';
+        results.forEach(function(name) {
+            html += '<button class="btn btn-sm btn-outline" style="font-size:.75rem;padding:.15rem .5rem;margin:.15rem;border-color:var(--accent);color:var(--accent);" '
+                + 'onclick="pullOllamaLibraryModel(\'' + name.replace(/'/g, "\\'") + '\')">' + name + '</button>';
+        });
+        resultEl.innerHTML = html;
+    } catch(e) { resultEl.innerHTML = '<span style="color:#f85149">Error: ' + e.message + '</span>'; }
+}
+
+async function pullOllamaLibraryModel(name) {
+    const resultEl = document.getElementById('od-search-result');
+    resultEl.innerHTML = '<span class="spinner"></span> Pulling <strong>' + name + '</strong>\u2026 this may take a few minutes.';
+    try {
+        const res = await cyberPost('/action/ollama-pull', {model_name: name});
+        if (res._error || res.error) {
+            resultEl.innerHTML = '<span style="color:#f85149">Pull failed: ' + (res._error || res.error) + '</span>';
+        } else {
+            window._selectedOllamaTag = name;
+            document.getElementById('od-model').value = name;
+            resultEl.innerHTML = '<span style="color:var(--green)">\u2713 Pulled <strong>' + name + '</strong>! Ready to quantize.</span>';
+            // Update stored selection
+            const sel = CyberForge.getSelected();
+            if (sel) { sel.ollama_tag = name; CyberForge.setSelected(sel); }
+        }
+    } catch(e) { resultEl.innerHTML = '<span style="color:#f85149">Error: ' + e.message + '</span>'; }
+}
+
 function applyPreset(el, level) {
     // Highlight selected preset card
-    document.querySelectorAll('#step6 .mode-card').forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll('#step5 .mode-card').forEach(c => c.classList.remove('selected'));
     el.classList.add('selected');
     // Set backend to Ollama and apply the GGUF level
     document.getElementById('od-backend').value = 'ollama';
@@ -862,23 +1163,29 @@ function applyPreset(el, level) {
 }
 
 function onBackendChange() {
-    const backend = document.getElementById('od-backend').value;
     const ggufGroup = document.getElementById('gguf-level-group');
-    const hfSection = document.getElementById('hf-token-section');
-    // Show GGUF level selector only for Ollama
-    if (ggufGroup) ggufGroup.style.display = (backend === 'ollama') ? '' : 'none';
-    // Show HF token input for non-Ollama backends
-    if (hfSection) hfSection.style.display = (backend === 'ollama') ? 'none' : 'block';
-    // Sync model field to correct ID format
+    if (ggufGroup) ggufGroup.style.display = '';
     _syncModelField();
 }
 // Initialize backend visibility on page load
 document.addEventListener('DOMContentLoaded', function() { onBackendChange(); });
 
-// ── Load env status for Step 6 on page load ──
+// ── Load env status for Step 5 on page load ──
 (async function() {
     try {
-        const status = await cyberGet('/action/quantize-status');
+        // Auto-start Ollama if not running
+        const ollamaCheck = await cyberGet('/action/ollama-status');
+        if (!ollamaCheck.available) {
+            const el = document.getElementById('od-env-status');
+            if (el) el.innerHTML = '<span class="spinner"></span> Ollama not running \u2014 auto-starting\u2026';
+            const startRes = await cyberPost('/action/ollama-start');
+            if (!startRes.started && !startRes.warning) {
+                if (el) el.innerHTML = '<span style="color:#d29922;">\u26A0 Could not auto-start Ollama: ' + (startRes.error || 'unknown') + '</span> '
+                    + '<button class="btn btn-sm btn-green" onclick="retryOllamaStart(this)" style="margin-left:.5rem;font-size:.75rem;">Retry</button>';
+            }
+        }
+        const _timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
+        const status = await Promise.race([cyberGet('/action/quantize-status'), _timeout]);
         const el = document.getElementById('od-env-status');
         if (!el) return;
         if (status._error) { el.innerHTML = '<span style="color:#f85149">' + status._error + '</span>'; return; }
@@ -896,23 +1203,34 @@ document.addEventListener('DOMContentLoaded', function() { onBackendChange(); })
         }
         html += '</div>';
         el.innerHTML = html;
-    } catch(e) { const el = document.getElementById('od-env-status'); if(el) el.innerHTML = '<span style="color:#8b949e">Could not check backends</span>'; }
+    } catch(e) {
+        const el = document.getElementById('od-env-status');
+        if(el) el.innerHTML = e.message === 'timeout'
+            ? '<span style="color:#d29922">Backend check timed out &mdash; services may still be starting. <a href="javascript:location.reload()" style="color:var(--accent)">Retry</a></span>'
+            : '<span style="color:#8b949e">Could not check backends</span>';
+    }
 })();
 
+function retryOllamaStart(el) {
+    el.parentElement.innerHTML = '<span class="spinner"></span> Retrying\u2026';
+    fetch('/action/ollama-start', {method: 'POST'}).then(() => location.reload());
+}
+
 async function runSelfTest(type) {
-    setStep(3);
+    setStep(3, true);
     showLoading('test-result');
     try {
         const data = await cyberPost('/action/self-test/' + type);
         if (data._error) { showResult('test-result', '<span style="color:#f85149">' + data._error + '</span>'); return; }
         let html = '<h3 style="color:var(--green)">&#10003; ' + type.toUpperCase() + ' Self-Test Complete</h3>';
         html += '<pre style="color:var(--fg);white-space:pre-wrap;font-size:.85rem;">' + JSON.stringify(data, null, 2) + '</pre>';
+        html += '<div style="margin-top:1rem;"><button class="btn btn-green" onclick="setStep(4)">Continue &rarr; Get Model Recommendations</button></div>';
         showResult('test-result', html);
     } catch (e) { showResult('test-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
 async function getRecommendations() {
-    setStep(4);
+    setStep(4, true);
     showLoading('rec-result');
     try {
         const data = await cyberPost('/action/recommend', {task_mode: window._selectedMode, top_k: 10});
@@ -937,20 +1255,42 @@ async function getRecommendations() {
             if (reason) html += '<br><span style="color:#8b949e;font-size:.85rem;">' + reason + '</span>';
             html += '</div></div>';
         });
+        // Action bar (shown once a model is selected)
+        html += '<div id="rec-actions" class="card" style="display:none;margin-top:1rem;border-color:var(--accent);background:#1a1025;">';
+        html += '<div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">';
+        html += '<strong style="color:var(--accent);">Selected: <span id="rec-actions-name"></span></strong>';
+        html += '<button class="btn btn-purple" onclick="recUseInWorkflow()" title="Continue with this model in the optimization workflow">&#9654; Use in Workflow</button>';
+        html += '<button class="btn btn-green" onclick="recStartOptimize()" title="Jump to Step 6 and start quantization immediately">&#128640; Start Optimization</button>';
+        html += '<button class="btn btn-outline" onclick="recOpenChat()" style="border-color:var(--accent);color:var(--accent);" title="Open chat with this model">&#128172; Chat</button>';
+        html += '<button class="btn btn-outline" onclick="recOpenBench()" style="border-color:var(--accent);color:var(--accent);" title="Jump to benchmark step">&#128202; Benchmark</button>';
+        html += '</div></div>';
         // Auto-fill overdrive model — prefer a model with an ollama_tag (actually runnable)
         if (picks.length > 0) {
             const m0 = picks[0].model || picks[0];
             window._selectedOllamaTag = m0.ollama_tag || '';
             window._selectedHfRepo = m0.hf_repo || '';
+            // Persist first pick to sessionStorage for cross-page handoff
+            CyberForge.setSelected({
+                id: m0.ollama_tag || m0.hf_repo || m0.id || '',
+                display_name: m0.display_name || m0.model_id || m0.id || '',
+                ollama_tag: m0.ollama_tag || '',
+                hf_repo: m0.hf_repo || '',
+                mode: window._selectedMode || ''
+            });
             _syncModelField();
             document.getElementById('bench-orig').value = window._selectedOllamaTag || window._selectedHfRepo || '';
+            // Show action bar for first pick
+            setTimeout(function() {
+                const bar = document.getElementById('rec-actions');
+                if (bar) { bar.style.display = ''; document.getElementById('rec-actions-name').textContent = m0.display_name || m0.ollama_tag || m0.hf_repo || ''; }
+            }, 100);
         }
         showResult('rec-result', html);
     } catch (e) { showResult('rec-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
 async function cleanupCache() {
-    setStep(5);
+    setStep(5, true);
     showLoading('cache-result');
     try {
         const data = await cyberPost('/action/cache-cleanup');
@@ -959,7 +1299,7 @@ async function cleanupCache() {
 }
 
 async function cleanupStale() {
-    setStep(5);
+    setStep(5, true);
     showLoading('cache-result');
     try {
         const data = await cyberPost('/action/cache-stale');
@@ -968,22 +1308,35 @@ async function cleanupStale() {
 }
 
 async function runQuantize() {
-    setStep(6);
+    setStep(5, true);
     showLoading('quant-result');
     const model = document.getElementById('od-model').value;
     const backend = document.getElementById('od-backend').value;
     const level = document.getElementById('od-level').value;
     if (!model) { showResult('quant-result', '<span style="color:#f85149">Enter a source model name.</span>'); return; }
 
-    // For Ollama backend, check if model exists and pull if needed
+    // For Ollama backend, ensure Ollama is running, then check/pull model
     if (backend === 'ollama') {
+        showResult('quant-result', '<span class="spinner"></span> Checking Ollama status...');
+        try {
+            const ollamaStatus = await cyberGet('/action/ollama-status');
+            if (!ollamaStatus.available) {
+                showResult('quant-result', '<span class="spinner"></span> Ollama not running \u2014 auto-starting...');
+                const startRes = await cyberPost('/action/ollama-start');
+                if (!startRes.started && !startRes.warning) {
+                    showResult('quant-result', '<span style="color:#f85149">Could not start Ollama: ' + (startRes.error || 'unknown') + '. Run <code>ollama serve</code> manually.</span>');
+                    return;
+                }
+                await new Promise(r => setTimeout(r, 2000));
+            }
+        } catch(e) { /* continue \u2014 pull attempt will surface any real issue */ }
         showResult('quant-result', '<span class="spinner"></span> Checking if model is available locally...');
         try {
             const models = await cyberGet('/action/ollama-models');
             const list = Array.isArray(models) ? models : [];
             const found = list.some(m => m.name === model || m.name.startsWith(model + ':'));
             if (!found) {
-                showResult('quant-result', '<span class="spinner"></span> Model not found locally — pulling <strong>' + model + '</strong> from Ollama (this may take a few minutes)...');
+                showResult('quant-result', '<span class="spinner"></span> Model not found locally \u2014 pulling <strong>' + model + '</strong> from Ollama (this may take a few minutes)...');
                 const pullResult = await cyberPost('/action/ollama-pull', {model_name: model});
                 if (pullResult._error) {
                     showResult('quant-result', '<span style="color:#f85149">Pull failed: ' + pullResult._error + '</span>');
@@ -996,8 +1349,6 @@ async function runQuantize() {
     showResult('quant-result', '<span class="spinner"></span> Quantizing <strong>' + model + '</strong> with ' + backend.toUpperCase() + '...');
     try {
         const payload = {source_model: model, backend: backend, quant_method: level};
-        const hfToken = (document.getElementById('hf-token') || {}).value;
-        if (hfToken && backend !== 'ollama') payload.hf_token = hfToken;
         const data = await cyberPost('/action/quantize', payload);
         if (data._error || data.error) {
             showResult('quant-result', '<span style="color:#f85149">' + (data._error || data.error) + '</span>');
@@ -1012,13 +1363,20 @@ async function runQuantize() {
             ['Success', data.success ? '&#10003; Yes' : '&#10007; No'],
         ]);
         // Auto-fill benchmark optimized model
-        if (data.output_model) document.getElementById('bench-opt').value = data.output_model;
+        if (data.output_model) {
+            document.getElementById('bench-opt').value = data.output_model;
+            window._optimizedModel = data.output_model;
+        }
+        html += '<div style="margin-top:1rem;display:flex;gap:.75rem;flex-wrap:wrap;align-items:center;">';
+        html += '<button class="btn btn-primary" onclick="setStep(6)">Continue &rarr; Benchmark &amp; Compare</button>';
+        html += '<span style="color:#8b949e;font-size:.85rem;">Benchmark before and after to see the impact.</span>';
+        html += '</div>';
         showResult('quant-result', html);
     } catch (e) { showResult('quant-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
 async function runQuantCompare() {
-    setStep(6);
+    setStep(5, true);
     showLoading('quant-result');
     const model = document.getElementById('od-model').value;
     if (!model) { showResult('quant-result', '<span style="color:#f85149">Enter a source model name.</span>'); return; }
@@ -1046,8 +1404,155 @@ async function runQuantCompare() {
     } catch (e) { showResult('quant-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
+// ── Compare mode switching ──
+function setBenchMode(mode) {
+    ['origopt','modmod','baseline'].forEach(m => {
+        document.getElementById('bench-panel-' + m).style.display = m === mode ? '' : 'none';
+        const btn = document.getElementById('cmpmode-' + m);
+        btn.className = m === mode ? 'btn btn-primary' : 'btn btn-outline';
+    });
+}
+
+// ── Shared SVG bar chart builder ──
+function svgBarChart(metrics, leftLabel, rightLabel, compareMode) {
+    if (!metrics || metrics.length === 0) return '<p style="color:#8b949e;font-style:italic;">No chart data — run benchmarks for both models first.</p>';
+    const valid = metrics.filter(m => m.left != null && m.right != null);
+    if (valid.length === 0) return '<p style="color:#8b949e;font-style:italic;">No chart data — all metrics are null. This happens when a metric is not measured for this task mode.</p>';
+    const W = 600, barH = 22, gap = 50, padL = 120, padR = 80;
+    const H = valid.length * gap + 30;
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:600px;font-family:sans-serif;font-size:12px;">';
+    valid.forEach(function(m, i) {
+        const y = i * gap + 10;
+        const maxVal = Math.max(m.left, m.right, 0.001);
+        const bW = Math.max((m.left / maxVal) * (W - padL - padR), 2);
+        const oW = Math.max((m.right / maxVal) * (W - padL - padR), 2);
+        const diff = m.right - m.left;
+        const pct = m.left !== 0 ? ((diff / m.left) * 100).toFixed(1) : '0.0';
+        const improved = m.lowerIsBetter ? diff < 0 : diff > 0;
+        const pctColor = improved ? '#3fb950' : (diff === 0 ? '#8b949e' : '#f85149');
+        svg += '<text x="' + (padL - 5) + '" y="' + (y + 10) + '" text-anchor="end" fill="#c9d1d9" font-weight="600">' + m.name + '</text>';
+        svg += '<rect x="' + padL + '" y="' + y + '" width="' + bW + '" height="' + barH + '" rx="3" fill="#58a6ff" opacity="0.85"/>';
+        svg += '<text x="' + (padL + bW + 4) + '" y="' + (y + 15) + '" fill="#58a6ff" font-size="11">' + m.left.toFixed(1) + m.unit + '</text>';
+        svg += '<rect x="' + padL + '" y="' + (y + barH + 2) + '" width="' + oW + '" height="' + barH + '" rx="3" fill="#3fb950" opacity="0.85"/>';
+        svg += '<text x="' + (padL + oW + 4) + '" y="' + (y + barH + 17) + '" fill="#3fb950" font-size="11">' + m.right.toFixed(1) + m.unit + '</text>';
+        const arrow = improved ? '\\u25B2' : (diff === 0 ? '\\u2500' : '\\u25BC');
+        svg += '<text x="' + (W - 5) + '" y="' + (y + barH + 5) + '" text-anchor="end" fill="' + pctColor + '" font-weight="600" font-size="11">' + arrow + ' ' + Math.abs(pct) + '%</text>';
+    });
+    svg += '</svg>';
+    svg += '<div style="display:flex;gap:1.5rem;margin-top:.5rem;font-size:.8rem;color:#8b949e;">';
+    svg += '<span><span style="display:inline-block;width:12px;height:12px;background:#58a6ff;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>' + leftLabel + '</span>';
+    svg += '<span><span style="display:inline-block;width:12px;height:12px;background:#3fb950;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>' + rightLabel + '</span>';
+    svg += '</div>';
+    return svg;
+}
+
+// ── Size reduction banner ──
+function sizeReductionBanner(d) {
+    if (!d || !d.model_size_mb || d.model_size_mb.baseline == null || d.model_size_mb.optimized == null) return '';
+    const orig = d.model_size_mb.baseline;
+    const opt = d.model_size_mb.optimized;
+    if (orig === 0 && opt === 0) return '<p style="color:#8b949e;font-style:italic;margin:.5rem 0;">Model size: not reported by backend (non-Ollama or model not found).</p>';
+    const redPct = orig > 0 ? ((orig - opt) / orig * 100).toFixed(1) : 0;
+    const reduced = opt < orig;
+    const color = reduced ? 'var(--green)' : (opt === orig ? '#8b949e' : '#f85149');
+    let h = '<div class="card" style="border-color:' + color + ';margin:1rem 0;text-align:center;">';
+    h += '<div style="font-size:2rem;font-weight:700;color:' + color + ';">';
+    if (reduced) h += '&#9660; ' + Math.abs(redPct) + '% smaller';
+    else if (opt === orig) h += '&#9644; Same size';
+    else h += '&#9650; ' + Math.abs(redPct) + '% larger';
+    h += '</div>';
+    h += '<div style="color:#8b949e;margin-top:.25rem;">' + orig.toFixed(0) + ' MB &rarr; ' + opt.toFixed(0) + ' MB</div>';
+    h += '</div>';
+    return h;
+}
+
+// ── Render compare result (shared between both modes) ──
+function renderCompareResult(data, targetId) {
+    const cmp = data.comparison || data;
+    const d = cmp.deltas || {};
+    const mode = cmp.compare_mode || 'model_vs_model';
+    const bInfo = cmp.baseline || {};
+    const oInfo = cmp.optimized || {};
+    const bLabel = bInfo.model_id || 'Model A';
+    const oLabel = oInfo.model_id || 'Model B';
+
+    let html = '';
+
+    // ── Header with mode badge ──
+    if (mode === 'original_vs_optimized') {
+        html += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">';
+        html += '<span style="background:var(--green);color:#0d1117;padding:2px 10px;border-radius:12px;font-size:.8rem;font-weight:600;">Original vs Optimized</span>';
+        html += '</div>';
+        html += '<h3 style="color:var(--green)">&#128260; Optimization Impact</h3>';
+        html += '<table style="margin-bottom:1rem;"><tbody>';
+        html += '<tr><td style="color:#8b949e;">Base Model</td><td><strong>' + bLabel + '</strong></td></tr>';
+        html += '<tr><td style="color:#8b949e;">Optimized Artifact</td><td><strong style="color:var(--green);">' + oLabel + '</strong></td></tr>';
+        html += '<tr><td style="color:#8b949e;">Original Label</td><td>' + (bInfo.label || 'baseline') + '</td></tr>';
+        html += '<tr><td style="color:#8b949e;">Optimized Label</td><td>' + (oInfo.label || '—') + '</td></tr>';
+        html += '</tbody></table>';
+        html += sizeReductionBanner(d);
+    } else {
+        html += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">';
+        html += '<span style="background:#58a6ff;color:#0d1117;padding:2px 10px;border-radius:12px;font-size:.8rem;font-weight:600;">Model vs Model</span>';
+        html += '</div>';
+        html += '<h3 style="color:#58a6ff;">&#128257; Side-by-Side Comparison</h3>';
+        html += '<p style="color:#8b949e;margin-bottom:1rem;"><strong style="color:#58a6ff;">' + bLabel + '</strong> vs <strong style="color:#3fb950;">' + oLabel + '</strong></p>';
+    }
+
+    // ── Performance chart ──
+    const perfMetrics = [];
+    if (d.latency_ms && d.latency_ms.baseline != null) perfMetrics.push({name:'Latency', left:d.latency_ms.baseline, right:d.latency_ms.optimized, unit:' ms', lowerIsBetter:true});
+    if (d.throughput_tok_s && d.throughput_tok_s.baseline != null) perfMetrics.push({name:'Throughput', left:d.throughput_tok_s.baseline, right:d.throughput_tok_s.optimized, unit:' tok/s', lowerIsBetter:false});
+    if (d.load_time_ms && d.load_time_ms.baseline != null) perfMetrics.push({name:'Load Time', left:d.load_time_ms.baseline, right:d.load_time_ms.optimized, unit:' ms', lowerIsBetter:true});
+    if (d.model_size_mb && d.model_size_mb.baseline != null) perfMetrics.push({name:'Size', left:d.model_size_mb.baseline, right:d.model_size_mb.optimized, unit:' MB', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:var(--green);margin-top:1rem;">';
+    html += '<h3>&#9889; Performance &amp; Size</h3>';
+    html += svgBarChart(perfMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    // ── Resource chart ──
+    const resMetrics = [];
+    if (d.vram_peak_mb && d.vram_peak_mb.baseline != null) resMetrics.push({name:'VRAM Peak', left:d.vram_peak_mb.baseline, right:d.vram_peak_mb.optimized, unit:' MB', lowerIsBetter:true});
+    if (d.ram_peak_mb && d.ram_peak_mb.baseline != null) resMetrics.push({name:'RAM Peak', left:d.ram_peak_mb.baseline, right:d.ram_peak_mb.optimized, unit:' MB', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:var(--purple);margin-top:1rem;">';
+    html += '<h3>&#128190; Resource Usage</h3>';
+    html += svgBarChart(resMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    // ── Quality chart ──
+    const qualMetrics = [];
+    if (d.exact_match && d.exact_match.baseline != null) qualMetrics.push({name:'Exact Match', left:d.exact_match.baseline, right:d.exact_match.optimized, unit:'', lowerIsBetter:false});
+    if (d.verifier_pass_rate && d.verifier_pass_rate.baseline != null) qualMetrics.push({name:'Verifier Pass', left:d.verifier_pass_rate.baseline, right:d.verifier_pass_rate.optimized, unit:'', lowerIsBetter:false});
+    if (d.structured_output_validity && d.structured_output_validity.baseline != null) qualMetrics.push({name:'Structured Output', left:d.structured_output_validity.baseline, right:d.structured_output_validity.optimized, unit:'', lowerIsBetter:false});
+    if (d.syntax_error_rate && d.syntax_error_rate.baseline != null) qualMetrics.push({name:'Syntax Error Rate', left:d.syntax_error_rate.baseline, right:d.syntax_error_rate.optimized, unit:'', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:#58a6ff;margin-top:1rem;">';
+    html += '<h3>&#127919; Quality Metrics</h3>';
+    html += svgBarChart(qualMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    // ── Summary table (all deltas) ──
+    html += '<div class="card" style="margin-top:1rem;">';
+    html += '<h3>&#128202; Full Metric Table</h3>';
+    const rows = [];
+    Object.keys(d).forEach(function(key) {
+        const m = d[key];
+        if (!m || m.baseline == null || m.optimized == null) return;
+        const imp = m.improved;
+        const color = imp === true ? 'var(--green)' : (imp === false ? '#f85149' : '#8b949e');
+        const arrow = imp === true ? '&#9650;' : (imp === false ? '&#9660;' : '&#9644;');
+        rows.push([key.replace(/_/g,' '), m.baseline.toFixed(2), m.optimized.toFixed(2), '<span style="color:' + color + ';font-weight:600;">' + arrow + ' ' + (m.percent != null ? Math.abs(m.percent).toFixed(1) + '%' : '—') + '</span>']);
+    });
+    if (rows.length) html += buildTable([mode === 'original_vs_optimized' ? 'Metric' : 'Metric', bLabel, oLabel, 'Change'], rows);
+    else html += '<p style="color:#8b949e;font-style:italic;">No comparable metrics available.</p>';
+    html += '</div>';
+
+    if (data.report_path) html += '<p style="color:#8b949e;margin-top:.5rem;">Report saved: ' + data.report_path + '</p>';
+    return html;
+}
+
+// ── Original vs Optimized ──
 async function runBenchmark(label) {
-    setStep(7);
+    setStep(6, true);
     showLoading('bench-result');
     const modelId = label === 'original' ? document.getElementById('bench-orig').value : document.getElementById('bench-opt').value;
     const mode = document.getElementById('bench-mode').value;
@@ -1056,6 +1561,7 @@ async function runBenchmark(label) {
         const data = await cyberPost('/action/benchmark', {model_id: modelId, task_mode: mode, label: label === 'original' ? 'baseline' : label, backend: 'ollama'});
         if (data._error || data.error) { showResult('bench-result', '<span style="color:#f85149">' + (data._error || data.error) + '</span>'); return; }
         window._benchCards[label] = data;
+        const _bothDone = window._benchCards['original'] && window._benchCards['optimized'];
         let html = '<h3>' + label.charAt(0).toUpperCase() + label.slice(1) + ' Benchmark — ' + (data.model_id || modelId) + '</h3>';
         const sys = data.system || {};
         const task = data.task || {};
@@ -1065,82 +1571,129 @@ async function runBenchmark(label) {
             ['VRAM Peak', (sys.vram_peak_mb||0).toFixed(0) + ' MB'],
             ['Load Time', (sys.load_time_ms||0).toFixed(0) + ' ms'],
             ['Model Size', (sys.model_size_mb||0).toFixed(0) + ' MB'],
-            ['Pass@k', task.pass_at_k != null ? task.pass_at_k.toFixed(3) : 'N/A'],
             ['Exact Match', task.exact_match != null ? task.exact_match.toFixed(3) : 'N/A'],
             ['F1', task.f1 != null ? task.f1.toFixed(3) : 'N/A'],
         ]);
+        if (_bothDone) {
+            html += '<div style="margin-top:1rem;padding:.75rem;border:1px solid var(--green);border-radius:8px;background:#0d1f0d;">';
+            html += '<strong style="color:var(--green);">&#10003; Both benchmarks complete!</strong> ';
+            html += '<button class="btn btn-green" onclick="compareBenchmarks()" style="margin-left:.75rem;">Compare Results Now</button>';
+            html += '</div>';
+        } else {
+            const other = label === 'original' ? 'Optimized' : 'Original';
+            html += '<div style="margin-top:.75rem;color:#8b949e;">Now benchmark the <strong>' + other + '</strong> model above to compare.</div>';
+        }
         showResult('bench-result', html);
     } catch (e) { showResult('bench-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
 async function compareBenchmarks() {
-    setStep(7);
+    setStep(6, true);
     const cards = await cyberGet('/action/bench-cards');
     if (!Array.isArray(cards) || cards.length < 2) {
-        showResult('bench-result', '<span style="color:#f85149">Need at least 2 benchmark cards. Run both original and optimized benchmarks first.</span>');
+        showResult('bench-result', '<span style="color:#f85149">Need at least 2 benchmark cards. Run both "Benchmark Original" and "Benchmark Optimized" above first.</span>');
         return;
     }
     showLoading('bench-result');
     try {
         const data = await cyberPost('/action/compare', {baseline_file: cards[cards.length-2], optimized_file: cards[cards.length-1], save_report: true});
         if (data._error) { showResult('bench-result', '<span style="color:#f85149">' + data._error + '</span>'); return; }
-        const cmp = data.comparison || data;
-        const d = cmp.deltas || {};
-        const bLabel = (cmp.baseline || {}).model_id || 'Baseline';
-        const oLabel = (cmp.optimized || {}).model_id || 'Optimized';
-        let html = '<h3 style="color:var(--green)">&#128200; Benchmark Comparison</h3>';
-        html += '<p style="color:#8b949e;margin-bottom:1rem;"><strong>' + bLabel + '</strong> vs <strong style="color:var(--green)">' + oLabel + '</strong></p>';
+        let cmpHtml = renderCompareResult(data, 'bench-result');
+        cmpHtml += '<div style="margin-top:1rem;"><button class="btn btn-green" onclick="setStep(7)">Continue &rarr; Final Report</button></div>';
+        showResult('bench-result', cmpHtml);
+    } catch (e) { showResult('bench-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
+}
 
-        function barChart(metricName, baseVal, optVal, unit, lowerIsBetter) {
-            if (baseVal == null || optVal == null) return '';
-            const max = Math.max(baseVal, optVal, 0.001);
-            const bPct = (baseVal / max * 100).toFixed(1);
-            const oPct = (optVal / max * 100).toFixed(1);
-            const diff = optVal - baseVal;
-            const pct = baseVal !== 0 ? ((diff / baseVal) * 100).toFixed(1) : '0.0';
-            const improved = lowerIsBetter ? diff < 0 : diff > 0;
-            const arrow = improved ? '&#9650;' : (diff === 0 ? '&#9644;' : '&#9660;');
-            const color = improved ? 'var(--green)' : (diff === 0 ? '#8b949e' : '#f85149');
-            let h = '<div style="margin-bottom:1.2rem;">';
-            h += '<div style="display:flex;justify-content:space-between;margin-bottom:.3rem;"><strong>' + metricName + '</strong><span style="color:' + color + ';font-weight:600;">' + arrow + ' ' + Math.abs(pct) + '%</span></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.2rem;"><span style="width:80px;font-size:.8rem;color:#8b949e;">' + bLabel.split(':')[0].slice(0,12) + '</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:22px;overflow:hidden;">';
-            h += '<div style="width:' + bPct + '%;height:100%;background:#58a6ff;border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:.75rem;color:#0d1117;font-weight:600;">' + baseVal.toFixed(1) + unit + '</div></div></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;"><span style="width:80px;font-size:.8rem;color:#8b949e;">' + oLabel.split(':')[0].slice(0,12) + '</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:22px;overflow:hidden;">';
-            h += '<div style="width:' + oPct + '%;height:100%;background:var(--green);border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:.75rem;color:#0d1117;font-weight:600;">' + optVal.toFixed(1) + unit + '</div></div></div>';
-            h += '</div>';
-            return h;
+// ── Model vs Model ──
+async function runBenchmarkMM(side) {
+    setStep(6, true);
+    showLoading('bench-result');
+    const modelId = side === 'left' ? document.getElementById('bench-left').value : document.getElementById('bench-right').value;
+    const mode = document.getElementById('bench-mode2').value;
+    if (!modelId) { showResult('bench-result', '<span style="color:#f85149">Enter a model ID for ' + (side === 'left' ? 'Left (A)' : 'Right (B)') + '.</span>'); return; }
+    try {
+        const data = await cyberPost('/action/benchmark', {model_id: modelId, task_mode: mode, label: side === 'left' ? 'model_a' : 'model_b', backend: 'ollama'});
+        if (data._error || data.error) { showResult('bench-result', '<span style="color:#f85149">' + (data._error || data.error) + '</span>'); return; }
+        window._benchCards[side] = data;
+        const _bothDoneMM = window._benchCards['left'] && window._benchCards['right'];
+        let html = '<h3>Model ' + (side === 'left' ? 'A' : 'B') + ' — ' + (data.model_id || modelId) + '</h3>';
+        const sys = data.system || {};
+        const task = data.task || {};
+        html += buildTable(['Metric', 'Value'], [
+            ['Latency', (sys.latency_ms||0).toFixed(1) + ' ms'],
+            ['Throughput', (sys.throughput_tok_s||0).toFixed(1) + ' tok/s'],
+            ['VRAM Peak', (sys.vram_peak_mb||0).toFixed(0) + ' MB'],
+            ['Model Size', (sys.model_size_mb||0).toFixed(0) + ' MB'],
+            ['Exact Match', task.exact_match != null ? task.exact_match.toFixed(3) : 'N/A'],
+        ]);
+        if (_bothDoneMM) {
+            html += '<div style="margin-top:1rem;padding:.75rem;border:1px solid var(--green);border-radius:8px;background:#0d1f0d;">';
+            html += '<strong style="color:var(--green);">&#10003; Both benchmarks complete!</strong> ';
+            html += '<button class="btn btn-green" onclick="compareBenchmarksMM()" style="margin-left:.75rem;">Compare A vs B Now</button>';
+            html += '</div>';
+        } else {
+            const other = side === 'left' ? 'Right (B)' : 'Left (A)';
+            html += '<div style="margin-top:.75rem;color:#8b949e;">Now benchmark <strong>' + other + '</strong> above to compare.</div>';
         }
-
-        html += '<div class="card" style="border-color:var(--green);">';
-        html += '<h3>&#9889; Performance Metrics</h3>';
-        if (d.latency_ms) html += barChart('Latency', d.latency_ms.baseline, d.latency_ms.optimized, ' ms', true);
-        if (d.throughput_tok_s) html += barChart('Throughput', d.throughput_tok_s.baseline, d.throughput_tok_s.optimized, ' tok/s', false);
-        if (d.load_time_ms) html += barChart('Load Time', d.load_time_ms.baseline, d.load_time_ms.optimized, ' ms', true);
-        html += '</div>';
-
-        html += '<div class="card" style="border-color:var(--purple);margin-top:1rem;">';
-        html += '<h3>&#128190; Resource Usage</h3>';
-        if (d.vram_peak_mb) html += barChart('VRAM Peak', d.vram_peak_mb.baseline, d.vram_peak_mb.optimized, ' MB', true);
-        if (d.ram_peak_mb) html += barChart('RAM Peak', d.ram_peak_mb.baseline, d.ram_peak_mb.optimized, ' MB', true);
-        html += '</div>';
-
-        html += '<div class="card" style="border-color:#58a6ff;margin-top:1rem;">';
-        html += '<h3>&#127919; Quality Metrics</h3>';
-        if (d.exact_match) html += barChart('Exact Match', d.exact_match.baseline, d.exact_match.optimized, '', false);
-        if (d.verifier_pass_rate && d.verifier_pass_rate.baseline != null) html += barChart('Verifier Pass', d.verifier_pass_rate.baseline, d.verifier_pass_rate.optimized, '', false);
-        if (d.structured_output_validity) html += barChart('Structured Output', d.structured_output_validity.baseline, d.structured_output_validity.optimized, '', false);
-        if (d.syntax_error_rate && d.syntax_error_rate.baseline != null) html += barChart('Syntax Error Rate', d.syntax_error_rate.baseline, d.syntax_error_rate.optimized, '', true);
-        html += '</div>';
-
-        if (data.report_path) html += '<p style="color:#8b949e;margin-top:.5rem;">Report saved: ' + data.report_path + '</p>';
         showResult('bench-result', html);
     } catch (e) { showResult('bench-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
 }
 
+async function keepOptimizedModel() {
+    const btn = document.getElementById('btn-keep');
+    const btnD = document.getElementById('btn-discard');
+    btn.disabled = true;
+    btn.textContent = '\\u2713 Kept — model stays in Ollama';
+    btn.style.opacity = '0.7';
+    if (btnD) { btnD.disabled = true; btnD.style.opacity = '0.4'; }
+}
+
+async function discardOptimizedModel() {
+    const model = window._optimizedModel || '';
+    if (!model) return;
+    if (!confirm('Delete optimized model "' + model + '" from Ollama? This cannot be undone.')) return;
+    const btn = document.getElementById('btn-discard');
+    const btnK = document.getElementById('btn-keep');
+    btn.disabled = true;
+    btn.textContent = 'Deleting...';
+    try {
+        const data = await cyberPost('/action/ollama-delete', {model_name: model});
+        if (data.deleted) {
+            btn.textContent = '\\u2713 Deleted';
+            btn.style.borderColor = 'var(--green)';
+            btn.style.color = 'var(--green)';
+            if (btnK) { btnK.disabled = true; btnK.style.opacity = '0.4'; }
+            window._optimizedModel = '';
+        } else {
+            btn.textContent = 'Delete failed: ' + (data.error || 'unknown');
+            btn.style.color = '#f85149';
+            btn.disabled = false;
+        }
+    } catch (e) {
+        btn.textContent = 'Error: ' + e.message;
+        btn.disabled = false;
+    }
+}
+
+async function compareBenchmarksMM() {
+    setStep(6, true);
+    const cards = await cyberGet('/action/bench-cards');
+    if (!Array.isArray(cards) || cards.length < 2) {
+        showResult('bench-result', '<span style="color:#f85149">Need at least 2 benchmark cards. Run both Left (A) and Right (B) benchmarks first.</span>');
+        return;
+    }
+    showLoading('bench-result');
+    try {
+        const data = await cyberPost('/action/compare', {baseline_file: cards[cards.length-2], optimized_file: cards[cards.length-1], save_report: true});
+        if (data._error) { showResult('bench-result', '<span style="color:#f85149">' + data._error + '</span>'); return; }
+        let cmpHtmlMM = renderCompareResult(data, 'bench-result');
+        cmpHtmlMM += '<div style="margin-top:1rem;"><button class="btn btn-green" onclick="setStep(7)">Continue &rarr; Final Report</button></div>';
+        showResult('bench-result', cmpHtmlMM);
+    } catch (e) { showResult('bench-result', '<span style="color:#f85149">Error: ' + e.message + '</span>'); }
+}
+
 async function generateFinalReport() {
-    setStep(8);
+    setStep(7, true);
     let html = '<h3 style="color:var(--green)">&#127942; Optimization Summary</h3>';
     html += '<p><strong>Task Mode:</strong> ' + window._selectedMode + '</p>';
     const orig = window._benchCards['original'];
@@ -1148,46 +1701,71 @@ async function generateFinalReport() {
     if (orig && opt) {
         const origSys = orig.system || {};
         const optSys = opt.system || {};
-
-        function miniBar(label, baseVal, optVal, unit, lowerIsBetter) {
-            if (!baseVal && !optVal) return '';
-            const max = Math.max(baseVal, optVal, 0.001);
-            const bPct = (baseVal / max * 100).toFixed(1);
-            const oPct = (optVal / max * 100).toFixed(1);
-            const diff = optVal - baseVal;
-            const pct = baseVal !== 0 ? ((diff / baseVal) * 100).toFixed(1) : '0.0';
-            const improved = lowerIsBetter ? diff < 0 : diff > 0;
-            const color = improved ? 'var(--green)' : (diff === 0 ? '#8b949e' : '#f85149');
-            const arrow = improved ? '&#9650;' : (diff === 0 ? '&#9644;' : '&#9660;');
-            let h = '<div style="margin-bottom:1rem;">';
-            h += '<div style="display:flex;justify-content:space-between;margin-bottom:.2rem;"><strong>' + label + '</strong><span style="color:' + color + ';font-weight:600;">' + arrow + ' ' + Math.abs(pct) + '%</span></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.15rem;"><span style="width:70px;font-size:.75rem;color:#8b949e;">Original</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:20px;overflow:hidden;">';
-            h += '<div style="width:' + bPct + '%;height:100%;background:#58a6ff;border-radius:4px;display:flex;align-items:center;padding-left:5px;font-size:.7rem;color:#0d1117;font-weight:600;">' + baseVal.toFixed(1) + unit + '</div></div></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;"><span style="width:70px;font-size:.75rem;color:#8b949e;">Optimized</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:20px;overflow:hidden;">';
-            h += '<div style="width:' + oPct + '%;height:100%;background:var(--green);border-radius:4px;display:flex;align-items:center;padding-left:5px;font-size:.7rem;color:#0d1117;font-weight:600;">' + optVal.toFixed(1) + unit + '</div></div></div>';
-            h += '</div>';
-            return h;
+        // Size reduction banner
+        if (origSys.model_size_mb && optSys.model_size_mb) {
+            const szOrig = origSys.model_size_mb;
+            const szOpt = optSys.model_size_mb;
+            if (szOrig > 0) {
+                const redPct = ((szOrig - szOpt) / szOrig * 100).toFixed(1);
+                const col = szOpt < szOrig ? 'var(--green)' : '#f85149';
+                html += '<div class="card" style="border-color:' + col + ';text-align:center;margin:1rem 0;">';
+                html += '<div style="font-size:1.8rem;font-weight:700;color:' + col + ';">' + (szOpt < szOrig ? '&#9660; ' + Math.abs(redPct) + '% smaller' : '&#9650; ' + Math.abs(redPct) + '% larger') + '</div>';
+                html += '<div style="color:#8b949e;">' + szOrig.toFixed(0) + ' MB &rarr; ' + szOpt.toFixed(0) + ' MB</div></div>';
+            }
         }
-
+        const perfMetrics = [
+            {name:'Latency', left:origSys.latency_ms||0, right:optSys.latency_ms||0, unit:' ms', lowerIsBetter:true},
+            {name:'Throughput', left:origSys.throughput_tok_s||0, right:optSys.throughput_tok_s||0, unit:' tok/s', lowerIsBetter:false},
+            {name:'VRAM Peak', left:origSys.vram_peak_mb||0, right:optSys.vram_peak_mb||0, unit:' MB', lowerIsBetter:true},
+            {name:'Model Size', left:origSys.model_size_mb||0, right:optSys.model_size_mb||0, unit:' MB', lowerIsBetter:true},
+            {name:'Load Time', left:origSys.load_time_ms||0, right:optSys.load_time_ms||0, unit:' ms', lowerIsBetter:true},
+        ];
         html += '<div class="card" style="border-color:var(--green);">';
         html += '<h3>&#128200; Performance Comparison</h3>';
         html += '<p style="color:#8b949e;margin-bottom:.8rem;"><strong>' + (orig.model_id || '?') + '</strong> vs <strong style="color:var(--green)">' + (opt.model_id || '?') + '</strong></p>';
-        html += miniBar('Latency', origSys.latency_ms||0, optSys.latency_ms||0, ' ms', true);
-        html += miniBar('Throughput', origSys.throughput_tok_s||0, optSys.throughput_tok_s||0, ' tok/s', false);
-        html += miniBar('VRAM Peak', origSys.vram_peak_mb||0, optSys.vram_peak_mb||0, ' MB', true);
-        html += miniBar('Model Size', origSys.model_size_mb||0, optSys.model_size_mb||0, ' MB', true);
-        html += miniBar('Load Time', origSys.load_time_ms||0, optSys.load_time_ms||0, ' ms', true);
+        html += svgBarChart(perfMetrics, orig.model_id || 'Original', opt.model_id || 'Optimized', 'original_vs_optimized');
         html += '</div>';
     } else {
-        html += '<p style="color:#8b949e;">Run benchmarks on both original and optimized models (Step 7) to see a detailed comparison here.</p>';
+        html += '<p style="color:#8b949e;">Run benchmarks on both original and optimized models (Step 6) to see a detailed comparison here.</p>';
     }
-    html += '<p style="margin-top:1rem;color:#8b949e;">Tip: Not satisfied? Try a different quantization method in Step 6, or <a href="/chat">ask CyberForge Chat</a> for personalized advice.</p>';
+    // ── Save / Discard optimized model ──
+    const optModel = window._optimizedModel || (opt && opt.model_id) || '';
+    if (optModel) {
+        html += '<div id="save-discard-bar" style="margin-top:1.5rem;padding:1rem;border:1px solid var(--border);border-radius:8px;background:var(--card-bg);">';
+        html += '<strong style="font-size:1.05rem;">&#128230; Optimized Model: <code>' + optModel + '</code></strong>';
+        html += '<div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.75rem;">';
+        html += '<button id="btn-keep" class="btn btn-green" onclick="keepOptimizedModel()" style="min-width:160px;">&#10003; Keep Model</button>';
+        html += '<button id="btn-discard" class="btn btn-outline" onclick="discardOptimizedModel()" style="min-width:160px;border-color:#f85149;color:#f85149;">&#128465; Discard Model</button>';
+        html += '</div>';
+        html += '<p style="color:#8b949e;margin-top:.5rem;font-size:.85rem;">Keep saves the optimized model in Ollama. Discard deletes it to free disk space.</p>';
+        html += '</div>';
+    }
+    html += '<div style="margin-top:1.5rem;padding:1rem;border:1px solid var(--green);border-radius:8px;background:#0d1f0d;">';
+    html += '<strong style="color:var(--green);font-size:1.1rem;">&#127881; Workflow Complete</strong>';
+    html += '<div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.75rem;">';
+    html += '<a href="/chat" class="btn btn-primary" style="text-decoration:none;">&#128172; Chat with Model</a>';
+    html += '<button class="btn btn-purple" onclick="setStep(5, true)">&#9889; Try Different Optimization</button>';
+    html += '<button class="btn btn-outline" onclick="setStep(2, true)">&#128260; Start Over</button>';
+    html += '</div>';
+    html += '<p style="color:#8b949e;margin-top:.5rem;font-size:.85rem;">Not satisfied? Try a different quantization method, switch task modes, or <a href="/chat" style="color:var(--accent);">ask CyberForge Chat</a> for advice.</p>';
+    html += '</div>';
     showResult('final-result', html);
 }
 
-setStep(2);
+// ── Persist mode to sessionStorage for resume ──
+(function() {
+    const saved = sessionStorage.getItem('cf_selected_mode');
+    if (saved) {
+        window._selectedMode = saved;
+        // Highlight the saved mode card
+        document.querySelectorAll('#step2 .mode-card').forEach(function(c) {
+            if (c.getAttribute('onclick') && c.getAttribute('onclick').indexOf(saved) !== -1) {
+                c.classList.add('selected');
+            }
+        });
+    }
+})();
+setStep(2, true);
 """
     return _page("Workflow", body, "/workflow", extra_js=workflow_js)
 
@@ -1259,7 +1837,7 @@ async def models_page():
 </div>
 
 <h2>&#127760; Web Discovery</h2>
-<p style="color:#8b949e;margin-bottom:.75rem;">Search HuggingFace Hub for models that match your hardware. Shows what you can run <em>natively</em> and what you can run <strong>after quantization/pruning</strong>.</p>
+<p style="color:#8b949e;margin-bottom:.75rem;">Search HuggingFace Hub for models that match your hardware. Shows what you can run <em>natively</em> and what may fit <strong>after GGUF quantization</strong> (estimates are heuristic).</p>
 <div class="grid" style="margin:1rem 0;">
   <div class="form-group">
     <label>Task Mode</label>
@@ -1589,16 +2167,39 @@ async def bench_page():
 <div class="result-box" id="model-bench-result"></div>
 
 <h2>Compare Benchmark Cards</h2>
-<div class="grid" style="margin:1rem 0;">
-  <div class="form-group">
-    <label>Baseline Card</label>
-    <select id="cmp-base"><option value="">-- loading cards --</option></select>
-  </div>
-  <div class="form-group">
-    <label>Optimized Card</label>
-    <select id="cmp-opt"><option value="">-- loading cards --</option></select>
+<div style="display:flex;gap:.5rem;margin:1rem 0;">
+  <button class="btn btn-primary" id="bcmp-origopt" onclick="setBenchCmpMode('origopt')">&#128260; Original vs Optimized</button>
+  <button class="btn btn-outline" id="bcmp-modmod" onclick="setBenchCmpMode('modmod')">&#128257; Model vs Model</button>
+</div>
+
+<div id="bcmp-panel-origopt">
+  <p style="color:#8b949e;font-size:.9rem;margin-bottom:.5rem;">Select two cards for the same base model (one before and one after optimization).</p>
+  <div class="grid" style="margin:1rem 0;">
+    <div class="form-group">
+      <label>Original Card</label>
+      <select id="cmp-base"><option value="">-- loading cards --</option></select>
+    </div>
+    <div class="form-group">
+      <label>Optimized Card</label>
+      <select id="cmp-opt"><option value="">-- loading cards --</option></select>
+    </div>
   </div>
 </div>
+
+<div id="bcmp-panel-modmod" style="display:none;">
+  <p style="color:#8b949e;font-size:.9rem;margin-bottom:.5rem;">Select any two cards to compare side-by-side.</p>
+  <div class="grid" style="margin:1rem 0;">
+    <div class="form-group">
+      <label>Left Model (A)</label>
+      <select id="cmp-left"><option value="">-- loading cards --</option></select>
+    </div>
+    <div class="form-group">
+      <label>Right Model (B)</label>
+      <select id="cmp-right"><option value="">-- loading cards --</option></select>
+    </div>
+  </div>
+</div>
+
 <div style="display:flex;gap:.75rem;flex-wrap:wrap;">
   <button class="btn btn-outline" onclick="refreshCardDropdowns()">&#128451; Refresh Cards</button>
   <button class="btn btn-green" onclick="runCompare()">&#128200; Compare</button>
@@ -1607,6 +2208,148 @@ async def bench_page():
 """
 
     bench_js = """
+// ── Bench page compare mode switching ──
+let _benchCmpMode = 'origopt';
+function setBenchCmpMode(mode) {
+    _benchCmpMode = mode;
+    ['origopt','modmod'].forEach(m => {
+        document.getElementById('bcmp-panel-' + m).style.display = m === mode ? '' : 'none';
+        const btn = document.getElementById('bcmp-' + m);
+        btn.className = m === mode ? 'btn btn-primary' : 'btn btn-outline';
+    });
+}
+
+// ── SVG bar chart builder (shared) ──
+function svgBarChart(metrics, leftLabel, rightLabel, compareMode) {
+    if (!metrics || metrics.length === 0) return '<p style="color:#8b949e;font-style:italic;">No chart data — run benchmarks for both models first.</p>';
+    const valid = metrics.filter(m => m.left != null && m.right != null);
+    if (valid.length === 0) return '<p style="color:#8b949e;font-style:italic;">No chart data — all metrics are null for this task mode.</p>';
+    const W = 600, barH = 22, gap = 50, padL = 120, padR = 80;
+    const H = valid.length * gap + 30;
+    let svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;max-width:600px;font-family:sans-serif;font-size:12px;">';
+    valid.forEach(function(m, i) {
+        const y = i * gap + 10;
+        const maxVal = Math.max(m.left, m.right, 0.001);
+        const bW = Math.max((m.left / maxVal) * (W - padL - padR), 2);
+        const oW = Math.max((m.right / maxVal) * (W - padL - padR), 2);
+        const diff = m.right - m.left;
+        const pct = m.left !== 0 ? ((diff / m.left) * 100).toFixed(1) : '0.0';
+        const improved = m.lowerIsBetter ? diff < 0 : diff > 0;
+        const pctColor = improved ? '#3fb950' : (diff === 0 ? '#8b949e' : '#f85149');
+        svg += '<text x="' + (padL - 5) + '" y="' + (y + 10) + '" text-anchor="end" fill="#c9d1d9" font-weight="600">' + m.name + '</text>';
+        svg += '<rect x="' + padL + '" y="' + y + '" width="' + bW + '" height="' + barH + '" rx="3" fill="#58a6ff" opacity="0.85"/>';
+        svg += '<text x="' + (padL + bW + 4) + '" y="' + (y + 15) + '" fill="#58a6ff" font-size="11">' + m.left.toFixed(1) + m.unit + '</text>';
+        svg += '<rect x="' + padL + '" y="' + (y + barH + 2) + '" width="' + oW + '" height="' + barH + '" rx="3" fill="#3fb950" opacity="0.85"/>';
+        svg += '<text x="' + (padL + oW + 4) + '" y="' + (y + barH + 17) + '" fill="#3fb950" font-size="11">' + m.right.toFixed(1) + m.unit + '</text>';
+        const arrow = improved ? '\\u25B2' : (diff === 0 ? '\\u2500' : '\\u25BC');
+        svg += '<text x="' + (W - 5) + '" y="' + (y + barH + 5) + '" text-anchor="end" fill="' + pctColor + '" font-weight="600" font-size="11">' + arrow + ' ' + Math.abs(pct) + '%</text>';
+    });
+    svg += '</svg>';
+    svg += '<div style="display:flex;gap:1.5rem;margin-top:.5rem;font-size:.8rem;color:#8b949e;">';
+    svg += '<span><span style="display:inline-block;width:12px;height:12px;background:#58a6ff;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>' + leftLabel + '</span>';
+    svg += '<span><span style="display:inline-block;width:12px;height:12px;background:#3fb950;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>' + rightLabel + '</span>';
+    svg += '</div>';
+    return svg;
+}
+
+// ── Size reduction banner ──
+function sizeReductionBanner(d) {
+    if (!d || !d.model_size_mb || d.model_size_mb.baseline == null || d.model_size_mb.optimized == null) return '';
+    const orig = d.model_size_mb.baseline;
+    const opt = d.model_size_mb.optimized;
+    if (orig === 0 && opt === 0) return '<p style="color:#8b949e;font-style:italic;margin:.5rem 0;">Model size: not reported by backend.</p>';
+    const redPct = orig > 0 ? ((orig - opt) / orig * 100).toFixed(1) : 0;
+    const reduced = opt < orig;
+    const color = reduced ? 'var(--green)' : (opt === orig ? '#8b949e' : '#f85149');
+    let h = '<div class="card" style="border-color:' + color + ';margin:1rem 0;text-align:center;">';
+    h += '<div style="font-size:2rem;font-weight:700;color:' + color + ';">';
+    if (reduced) h += '&#9660; ' + Math.abs(redPct) + '% smaller';
+    else if (opt === orig) h += '&#9644; Same size';
+    else h += '&#9650; ' + Math.abs(redPct) + '% larger';
+    h += '</div>';
+    h += '<div style="color:#8b949e;margin-top:.25rem;">' + orig.toFixed(0) + ' MB &rarr; ' + opt.toFixed(0) + ' MB</div>';
+    h += '</div>';
+    return h;
+}
+
+// ── Render compare result (shared) ──
+function renderCompareResult(data) {
+    const cmp = data.comparison || data;
+    const d = cmp.deltas || {};
+    const mode = cmp.compare_mode || 'model_vs_model';
+    const bInfo = cmp.baseline || {};
+    const oInfo = cmp.optimized || {};
+    const bLabel = bInfo.model_id || 'Model A';
+    const oLabel = oInfo.model_id || 'Model B';
+    let html = '';
+
+    if (mode === 'original_vs_optimized') {
+        html += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">';
+        html += '<span style="background:var(--green);color:#0d1117;padding:2px 10px;border-radius:12px;font-size:.8rem;font-weight:600;">Original vs Optimized</span>';
+        html += '</div>';
+        html += '<h3 style="color:var(--green)">&#128260; Optimization Impact</h3>';
+        html += '<table style="margin-bottom:1rem;"><tbody>';
+        html += '<tr><td style="color:#8b949e;">Base Model</td><td><strong>' + bLabel + '</strong></td></tr>';
+        html += '<tr><td style="color:#8b949e;">Optimized Artifact</td><td><strong style="color:var(--green);">' + oLabel + '</strong></td></tr>';
+        html += '<tr><td style="color:#8b949e;">Original Label</td><td>' + (bInfo.label || 'baseline') + '</td></tr>';
+        html += '<tr><td style="color:#8b949e;">Optimized Label</td><td>' + (oInfo.label || '—') + '</td></tr>';
+        html += '</tbody></table>';
+        html += sizeReductionBanner(d);
+    } else {
+        html += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;">';
+        html += '<span style="background:#58a6ff;color:#0d1117;padding:2px 10px;border-radius:12px;font-size:.8rem;font-weight:600;">Model vs Model</span>';
+        html += '</div>';
+        html += '<h3 style="color:#58a6ff;">&#128257; Side-by-Side Comparison</h3>';
+        html += '<p style="color:#8b949e;margin-bottom:1rem;"><strong style="color:#58a6ff;">' + bLabel + '</strong> vs <strong style="color:#3fb950;">' + oLabel + '</strong></p>';
+    }
+
+    const perfMetrics = [];
+    if (d.latency_ms && d.latency_ms.baseline != null) perfMetrics.push({name:'Latency', left:d.latency_ms.baseline, right:d.latency_ms.optimized, unit:' ms', lowerIsBetter:true});
+    if (d.throughput_tok_s && d.throughput_tok_s.baseline != null) perfMetrics.push({name:'Throughput', left:d.throughput_tok_s.baseline, right:d.throughput_tok_s.optimized, unit:' tok/s', lowerIsBetter:false});
+    if (d.load_time_ms && d.load_time_ms.baseline != null) perfMetrics.push({name:'Load Time', left:d.load_time_ms.baseline, right:d.load_time_ms.optimized, unit:' ms', lowerIsBetter:true});
+    if (d.model_size_mb && d.model_size_mb.baseline != null) perfMetrics.push({name:'Size', left:d.model_size_mb.baseline, right:d.model_size_mb.optimized, unit:' MB', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:var(--green);margin-top:1rem;">';
+    html += '<h3>&#9889; Performance &amp; Size</h3>';
+    html += svgBarChart(perfMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    const resMetrics = [];
+    if (d.vram_peak_mb && d.vram_peak_mb.baseline != null) resMetrics.push({name:'VRAM Peak', left:d.vram_peak_mb.baseline, right:d.vram_peak_mb.optimized, unit:' MB', lowerIsBetter:true});
+    if (d.ram_peak_mb && d.ram_peak_mb.baseline != null) resMetrics.push({name:'RAM Peak', left:d.ram_peak_mb.baseline, right:d.ram_peak_mb.optimized, unit:' MB', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:var(--purple);margin-top:1rem;">';
+    html += '<h3>&#128190; Resource Usage</h3>';
+    html += svgBarChart(resMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    const qualMetrics = [];
+    if (d.exact_match && d.exact_match.baseline != null) qualMetrics.push({name:'Exact Match', left:d.exact_match.baseline, right:d.exact_match.optimized, unit:'', lowerIsBetter:false});
+    if (d.verifier_pass_rate && d.verifier_pass_rate.baseline != null) qualMetrics.push({name:'Verifier Pass', left:d.verifier_pass_rate.baseline, right:d.verifier_pass_rate.optimized, unit:'', lowerIsBetter:false});
+    if (d.structured_output_validity && d.structured_output_validity.baseline != null) qualMetrics.push({name:'Structured Output', left:d.structured_output_validity.baseline, right:d.structured_output_validity.optimized, unit:'', lowerIsBetter:false});
+    if (d.syntax_error_rate && d.syntax_error_rate.baseline != null) qualMetrics.push({name:'Syntax Error Rate', left:d.syntax_error_rate.baseline, right:d.syntax_error_rate.optimized, unit:'', lowerIsBetter:true});
+    html += '<div class="card" style="border-color:#58a6ff;margin-top:1rem;">';
+    html += '<h3>&#127919; Quality Metrics</h3>';
+    html += svgBarChart(qualMetrics, bLabel, oLabel, mode);
+    html += '</div>';
+
+    html += '<div class="card" style="margin-top:1rem;">';
+    html += '<h3>&#128202; Full Metric Table</h3>';
+    const rows = [];
+    Object.keys(d).forEach(function(key) {
+        const m = d[key];
+        if (!m || m.baseline == null || m.optimized == null) return;
+        const imp = m.improved;
+        const color = imp === true ? 'var(--green)' : (imp === false ? '#f85149' : '#8b949e');
+        const arrow = imp === true ? '&#9650;' : (imp === false ? '&#9660;' : '&#9644;');
+        rows.push([key.replace(/_/g,' '), m.baseline.toFixed(2), m.optimized.toFixed(2), '<span style="color:' + color + ';font-weight:600;">' + arrow + ' ' + (m.percent != null ? Math.abs(m.percent).toFixed(1) + '%' : '—') + '</span>']);
+    });
+    if (rows.length) html += buildTable([mode === 'original_vs_optimized' ? 'Metric' : 'Metric', bLabel, oLabel, 'Change'], rows);
+    else html += '<p style="color:#8b949e;font-style:italic;">No comparable metrics available.</p>';
+    html += '</div>';
+
+    if (data.report_path) html += '<p style="color:#8b949e;margin-top:.5rem;">Report: ' + data.report_path + '</p>';
+    return html;
+}
+
 async function runTest(type) {
     showLoading('self-test-result');
     try {
@@ -1646,38 +2389,34 @@ async function runModelBench() {
         if (data._error) { showResult('model-bench-result', '<span style="color:#f85149">' + data._error + '</span>'); return; }
         const s = data.system || {};
         showResult('model-bench-result', '<h3 style="color:var(--green)">&#10003; Benchmark Complete</h3>' + buildTable(['Metric','Value'],[['Model', data.model_id],['Label', data.label],['Latency', (s.latency_ms||0).toFixed(1)+' ms'],['Throughput', (s.throughput_tok_s||0).toFixed(1)+' tok/s'],['VRAM Peak', (s.vram_peak_mb||0).toFixed(0)+' MB'],['Model Size', (s.model_size_mb||0).toFixed(0)+' MB']]));
-        // Refresh card dropdowns after a new benchmark
         await refreshCardDropdowns();
     } catch (e) { showResult('model-bench-result', '<span style="color:#f85149">' + e.message + '</span>'); }
 }
 async function refreshCardDropdowns() {
     try {
         const cards = await cyberGet('/action/bench-cards');
-        const baseEl = document.getElementById('cmp-base');
-        const optEl = document.getElementById('cmp-opt');
-        const prevBase = baseEl.value;
-        const prevOpt = optEl.value;
-        baseEl.innerHTML = '';
-        optEl.innerHTML = '';
-        if (Array.isArray(cards) && cards.length) {
-            baseEl.innerHTML += '<option value="">-- select baseline --</option>';
-            optEl.innerHTML += '<option value="">-- select optimized --</option>';
-            cards.forEach(c => {
-                baseEl.innerHTML += '<option value="' + c + '">' + c + '</option>';
-                optEl.innerHTML += '<option value="' + c + '">' + c + '</option>';
-            });
-            if (prevBase) baseEl.value = prevBase;
-            if (prevOpt) optEl.value = prevOpt;
-            // Auto-select: oldest → baseline, newest → optimized
-            if (!baseEl.value && cards.length >= 2) baseEl.value = cards[0];
-            if (!optEl.value && cards.length >= 2) optEl.value = cards[cards.length - 1];
-        } else {
-            baseEl.innerHTML = '<option value="">-- no cards yet --</option>';
-            optEl.innerHTML = '<option value="">-- no cards yet --</option>';
-        }
+        const selectors = ['cmp-base','cmp-opt','cmp-left','cmp-right'];
+        const prevVals = {};
+        selectors.forEach(id => { const el = document.getElementById(id); if (el) prevVals[id] = el.value; });
+        selectors.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const isLeft = id.endsWith('-base') || id.endsWith('-left');
+            const placeholder = isLeft ? '-- select card --' : '-- select card --';
+            el.innerHTML = '';
+            if (Array.isArray(cards) && cards.length) {
+                el.innerHTML += '<option value="">' + placeholder + '</option>';
+                cards.forEach(c => { el.innerHTML += '<option value="' + c + '">' + c + '</option>'; });
+                if (prevVals[id]) el.value = prevVals[id];
+                if (!el.value && cards.length >= 2) {
+                    el.value = isLeft ? cards[cards.length - 2] : cards[cards.length - 1];
+                }
+            } else {
+                el.innerHTML = '<option value="">-- no cards yet --</option>';
+            }
+        });
     } catch (e) { /* silent */ }
 }
-// Auto-populate card dropdowns on page load
 refreshCardDropdowns();
 // ── Bench model dropdown with safe pre-selection ──
 async function refreshBenchModels() {
@@ -1689,7 +2428,6 @@ async function refreshBenchModels() {
         const list = Array.isArray(models) ? models : (models.models || []);
         if (list.length > 0) {
             sel.innerHTML = '';
-            // Sort by size ascending so smaller (safer) models appear first
             list.sort((a, b) => (a.size || 0) - (b.size || 0));
             const selectedId = CyberForge.getModelId();
             let safeIdx = -1;
@@ -1700,12 +2438,11 @@ async function refreshBenchModels() {
                 const safe = m.size && m.size <= safeVramBytes;
                 const opt = document.createElement('option');
                 opt.value = name;
-                opt.textContent = name + ' (' + sizeGB + ' GB)' + (safe ? '' : ' \u26a0\ufe0f VRAM risk');
+                opt.textContent = name + ' (' + sizeGB + ' GB)' + (safe ? '' : ' \\u26a0\\ufe0f VRAM risk');
                 sel.appendChild(opt);
                 if (safe && safeIdx < 0) safeIdx = idx;
                 if (selectedId && name === selectedId) selectedIdx = idx;
             });
-            // Prefer the globally selected model, else first benchmark-safe model
             if (selectedIdx >= 0) sel.selectedIndex = selectedIdx;
             else if (safeIdx >= 0) sel.selectedIndex = safeIdx;
         } else {
@@ -1718,65 +2455,20 @@ async function refreshBenchModels() {
 refreshBenchModels();
 async function runCompare() {
     showLoading('compare-result');
-    const base = document.getElementById('cmp-base').value;
-    const opt = document.getElementById('cmp-opt').value;
-    if (!base || !opt) { showResult('compare-result', '<span style="color:#f85149">Enter both card filenames</span>'); return; }
+    let base, opt;
+    if (_benchCmpMode === 'modmod') {
+        base = document.getElementById('cmp-left').value;
+        opt = document.getElementById('cmp-right').value;
+    } else {
+        base = document.getElementById('cmp-base').value;
+        opt = document.getElementById('cmp-opt').value;
+    }
+    if (!base || !opt) { showResult('compare-result', '<span style="color:#f85149">Select both cards</span>'); return; }
     if (base === opt) { showResult('compare-result', '<span style="color:#f85149">Select two different cards</span>'); return; }
     try {
         const data = await cyberPost('/action/compare', {baseline_file: base, optimized_file: opt, save_report: true});
         if (data._error) { showResult('compare-result', '<span style="color:#f85149">' + data._error + '</span>'); return; }
-        const cmp = data.comparison || data;
-        const d = cmp.deltas || {};
-        const bLabel = (cmp.baseline || {}).model_id || 'Baseline';
-        const oLabel = (cmp.optimized || {}).model_id || 'Optimized';
-        let html = '<h3 style="color:var(--green)">&#128200; Benchmark Comparison</h3>';
-        html += '<p style="color:#8b949e;margin-bottom:1rem;"><strong>' + bLabel + '</strong> vs <strong style="color:var(--green)">' + oLabel + '</strong></p>';
-
-        function barChart(metricName, baseVal, optVal, unit, lowerIsBetter) {
-            if (baseVal == null || optVal == null) return '';
-            const max = Math.max(baseVal, optVal, 0.001);
-            const bPct = (baseVal / max * 100).toFixed(1);
-            const oPct = (optVal / max * 100).toFixed(1);
-            const diff = optVal - baseVal;
-            const pct = baseVal !== 0 ? ((diff / baseVal) * 100).toFixed(1) : '0.0';
-            const improved = lowerIsBetter ? diff < 0 : diff > 0;
-            const arrow = improved ? '&#9650;' : (diff === 0 ? '&#9644;' : '&#9660;');
-            const color = improved ? 'var(--green)' : (diff === 0 ? '#8b949e' : '#f85149');
-            let h = '<div style="margin-bottom:1.2rem;">';
-            h += '<div style="display:flex;justify-content:space-between;margin-bottom:.3rem;"><strong>' + metricName + '</strong><span style="color:' + color + ';font-weight:600;">' + arrow + ' ' + Math.abs(pct) + '%</span></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.2rem;"><span style="width:80px;font-size:.8rem;color:#8b949e;">' + bLabel.split(':')[0].slice(0,12) + '</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:22px;overflow:hidden;">';
-            h += '<div style="width:' + bPct + '%;height:100%;background:#58a6ff;border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:.75rem;color:#0d1117;font-weight:600;">' + baseVal.toFixed(1) + unit + '</div></div></div>';
-            h += '<div style="display:flex;align-items:center;gap:.5rem;"><span style="width:80px;font-size:.8rem;color:#8b949e;">' + oLabel.split(':')[0].slice(0,12) + '</span>';
-            h += '<div style="flex:1;background:#21262d;border-radius:4px;height:22px;overflow:hidden;">';
-            h += '<div style="width:' + oPct + '%;height:100%;background:var(--green);border-radius:4px;display:flex;align-items:center;padding-left:6px;font-size:.75rem;color:#0d1117;font-weight:600;">' + optVal.toFixed(1) + unit + '</div></div></div>';
-            h += '</div>';
-            return h;
-        }
-
-        html += '<div class="card" style="border-color:var(--green);">';
-        html += '<h3>&#9889; Performance</h3>';
-        if (d.latency_ms) html += barChart('Latency', d.latency_ms.baseline, d.latency_ms.optimized, ' ms', true);
-        if (d.throughput_tok_s) html += barChart('Throughput', d.throughput_tok_s.baseline, d.throughput_tok_s.optimized, ' tok/s', false);
-        if (d.load_time_ms) html += barChart('Load Time', d.load_time_ms.baseline, d.load_time_ms.optimized, ' ms', true);
-        html += '</div>';
-
-        html += '<div class="card" style="border-color:var(--purple);margin-top:1rem;">';
-        html += '<h3>&#128190; Resources</h3>';
-        if (d.vram_peak_mb) html += barChart('VRAM Peak', d.vram_peak_mb.baseline, d.vram_peak_mb.optimized, ' MB', true);
-        if (d.ram_peak_mb) html += barChart('RAM Peak', d.ram_peak_mb.baseline, d.ram_peak_mb.optimized, ' MB', true);
-        html += '</div>';
-
-        html += '<div class="card" style="border-color:#58a6ff;margin-top:1rem;">';
-        html += '<h3>&#127919; Quality</h3>';
-        if (d.exact_match) html += barChart('Exact Match', d.exact_match.baseline, d.exact_match.optimized, '', false);
-        if (d.verifier_pass_rate && d.verifier_pass_rate.baseline != null) html += barChart('Verifier Pass', d.verifier_pass_rate.baseline, d.verifier_pass_rate.optimized, '', false);
-        if (d.structured_output_validity) html += barChart('Structured Output', d.structured_output_validity.baseline, d.structured_output_validity.optimized, '', false);
-        if (d.syntax_error_rate && d.syntax_error_rate.baseline != null) html += barChart('Syntax Error Rate', d.syntax_error_rate.baseline, d.syntax_error_rate.optimized, '', true);
-        html += '</div>';
-
-        if (data.report_path) html += '<p style="color:#8b949e;margin-top:.5rem;">Report: ' + data.report_path + '</p>';
-        showResult('compare-result', html);
+        showResult('compare-result', renderCompareResult(data));
     } catch (e) { showResult('compare-result', '<span style="color:#f85149">' + e.message + '</span>'); }
 }
 """
@@ -1814,6 +2506,7 @@ async def cyber_page():
 <div class="grid">
   <div class="card"><strong>Sigma Validator</strong><br><code>POST /api/cyber/validate/sigma</code></div>
   <div class="card"><strong>YARA Validator</strong><br><code>POST /api/cyber/validate/yara</code></div>
+  <div class="card"><strong>Suricata Validator</strong><br><code>POST /api/cyber/validate/suricata</code></div>
   <div class="card"><strong>ATT&amp;CK Mapper</strong><br><code>POST /api/cyber/map/attack</code></div>
 </div>
 <h2>Copilot</h2>
@@ -1827,8 +2520,12 @@ Uses prompt packs (analyst, detection, report) with an Ollama-backed model.</div
 @app.get("/optimize", response_class=HTMLResponse)
 async def optimize_page():
     body = """\
-<h1>&#128640; Model Optimization</h1>
-<p style="color:#8b949e;margin-bottom:1rem;">Quantize and compress models using state-of-the-art algorithms. Reduce memory, increase throughput, maintain quality.</p>
+<h1>&#128640; Model Optimization <span style="font-size:.9rem;background:#6e40c9;color:#fff;padding:3px 10px;border-radius:6px;vertical-align:middle;">Advanced</span></h1>
+<div style="padding:.75rem 1rem;border:1px solid #6e40c9;border-radius:8px;background:#1a0d2e;margin-bottom:1rem;">
+<strong style="color:#d2a8ff;">&#9888; Expert Tool</strong>
+<span style="color:#8b949e;"> &mdash; This page exposes all optimization backends including HuggingFace-only methods. For the guided experience, use the <a href="/workflow" style="color:var(--accent);">Workflow</a> instead.</span>
+</div>
+<p style="color:#8b949e;margin-bottom:1rem;">Quantize and compress models using standard algorithms (GGUF, GPTQ, AWQ, bitsandbytes). Reduce memory, increase throughput, maintain quality.</p>
 
 <h2>Environment Status</h2>
 <div id="env-status" class="card"><span class="spinner"></span> Checking available quantization backends...</div>
@@ -2200,7 +2897,8 @@ async function checkModelInfo(modelName) {
 // ── Env status on page load ──
 (async function() {
     try {
-        const status = await cyberGet('/action/quantize-status');
+        const _timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
+        const status = await Promise.race([cyberGet('/action/quantize-status'), _timeout]);
         if (status._error) { document.getElementById('env-status').innerHTML = '<span style="color:#f85149">' + status._error + '</span>'; return; }
         const hw = status._hardware || {};
         let html = '';
@@ -2227,7 +2925,11 @@ async function checkModelInfo(modelName) {
         }
         html += '</div>';
         document.getElementById('env-status').innerHTML = html;
-    } catch(e) { document.getElementById('env-status').innerHTML = '<span style="color:#f85149">Failed to check status</span>'; }
+    } catch(e) {
+        document.getElementById('env-status').innerHTML = e.message === 'timeout'
+            ? '<span style="color:#d29922">Backend check timed out &mdash; services may still be starting. <a href="javascript:location.reload()" style="color:var(--accent)">Retry</a></span>'
+            : '<span style="color:#f85149">Failed to check status</span>';
+    }
 })();
 
 async function doQuantize() {
@@ -2535,7 +3237,8 @@ async function doEditSuggest() {
 // ── Smart Router ──
 (async function() {
     try {
-        const status = await cyberGet('/action/route-status');
+        const _timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000));
+        const status = await Promise.race([cyberGet('/action/route-status'), _timeout]);
         if (status._error) { document.getElementById('route-status').innerHTML = '<span style="color:#f85149">' + status._error + '</span>'; return; }
         let html = '<h3>Backend Health</h3><div class="grid">';
         const backends = status.backends || {};
@@ -2552,7 +3255,11 @@ async function doEditSuggest() {
         }
         html += '</div><div style="margin-top:.5rem;color:#8b949e;font-size:.85rem;">Strategy: ' + status.strategy + ' | Fallback: ' + (status.fallback_enabled?'On':'Off') + '</div>';
         document.getElementById('route-status').innerHTML = html;
-    } catch(e) { document.getElementById('route-status').innerHTML = '<span style="color:#f85149">Failed to check router status</span>'; }
+    } catch(e) {
+        document.getElementById('route-status').innerHTML = e.message === 'timeout'
+            ? '<span style="color:#d29922">Router check timed out &mdash; services may still be starting. <a href="javascript:location.reload()" style="color:var(--accent)">Retry</a></span>'
+            : '<span style="color:#f85149">Failed to check router status</span>';
+    }
 })();
 
 async function doRoute() {
@@ -2697,12 +3404,24 @@ async def jobs_page():
 async def chat_page():
     body = """\
 <h1>&#128172; CyberForge Chat</h1>
-<p style="color:#8b949e;margin-bottom:1rem;">Don't know which model to use? Describe your use case and get personalized recommendations. Powered by your local Ollama model.</p>
+<p style="color:#8b949e;margin-bottom:1rem;">Chat with your locally-running model. Powered by Ollama.</p>
 
 <div id="ollama-banner" class="card" style="border-color:var(--yellow);display:none;">
   <strong style="color:var(--yellow);">&#9888; Ollama Status</strong>
   <span id="ollama-banner-text"></span>
-  <button class="btn btn-sm btn-green" style="margin-left:.75rem;" onclick="startOllama()">Start Ollama</button>
+  <div style="margin-top:.5rem;">
+    <button class="btn btn-sm btn-green" onclick="startOllama()">Start Ollama</button>
+    <a href="https://ollama.com/download" target="_blank" class="btn btn-sm btn-outline" style="margin-left:.5rem;">Install Ollama</a>
+  </div>
+</div>
+
+<div id="selected-model-banner" class="card" style="border-color:var(--accent);display:none;">
+  <div style="display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;">
+    <strong style="color:var(--accent);">Selected Model:</strong>
+    <span id="sel-model-name" style="font-weight:600;"></span>
+    <span id="sel-model-status" class="badge"></span>
+  </div>
+  <div id="sel-model-action" style="margin-top:.5rem;display:none;"></div>
 </div>
 
 <div class="card">
@@ -2712,6 +3431,7 @@ async def chat_page():
       <select id="chat-model-select" style="flex:1;"><option value="">Loading models...</option></select>
       <button class="btn btn-sm btn-outline" onclick="refreshChatModels()">&#8635;</button>
     </div>
+    <p style="font-size:.8rem;color:#8b949e;margin:.25rem 0 0;">Only Ollama-loaded models appear here. Select a model in the <a href="/workflow" style="color:var(--accent);">Workflow</a> to use it everywhere.</p>
   </div>
   <div class="chat-box" id="chat-box">
     <div class="chat-msg chat-bot">
@@ -2747,6 +3467,9 @@ async def chat_page():
 
     chat_js = """
 let _chatModel = null;
+let _ollamaAvailable = false;
+let _ollamaModels = [];
+
 async function refreshChatModels() {
     const sel = document.getElementById('chat-model-select');
     const mc = CyberForge.getMachineClass();
@@ -2754,9 +3477,10 @@ async function refreshChatModels() {
     try {
         const models = await cyberGet('/action/ollama-models');
         const list = Array.isArray(models) ? models : (models.models || []);
+        _ollamaModels = list.map(m => m.name || m);
         if (list.length > 0) {
+            _ollamaAvailable = true;
             sel.innerHTML = '';
-            // Sort ascending by size — safer (smaller) models first
             list.sort((a, b) => (a.size || 0) - (b.size || 0));
             const selectedId = CyberForge.getModelId();
             let safeIdx = -1;
@@ -2772,53 +3496,106 @@ async function refreshChatModels() {
                 if (safe && safeIdx < 0) safeIdx = idx;
                 if (selectedId && name === selectedId) selectedIdx = idx;
             });
-            // Prefer the globally selected model, else first safe model
             if (selectedIdx >= 0) sel.selectedIndex = selectedIdx;
             else if (safeIdx >= 0) sel.selectedIndex = safeIdx;
             _chatModel = sel.value;
             document.getElementById('ollama-banner').style.display = 'none';
         } else {
-            sel.innerHTML = '<option value="">No models found</option>';
+            _ollamaAvailable = true;
+            sel.innerHTML = '<option value="">No models found \u2014 run: ollama pull qwen2.5:3b</option>';
             _chatModel = null;
         }
     } catch (e) {
-        sel.innerHTML = '<option value="">Failed to load models</option>';
+        sel.innerHTML = '<option value="">Ollama not available</option>';
         _chatModel = null;
-        // Check if Ollama is even running
+        _ollamaAvailable = false;
         checkOllamaStatus();
     }
+    showSelectedModelBanner();
+}
+function showSelectedModelBanner() {
+    const m = CyberForge.getSelected();
+    const banner = document.getElementById('selected-model-banner');
+    if (!banner) return;
+    if (!m) { banner.style.display = 'none'; return; }
+    const name = m.display_name || m.ollama_tag || m.hf_repo || m.id || '';
+    document.getElementById('sel-model-name').textContent = name;
+    const statusEl = document.getElementById('sel-model-status');
+    const actionEl = document.getElementById('sel-model-action');
+    const ollamaTag = m.ollama_tag || '';
+    const hfRepo = m.hf_repo || '';
+    const inOllama = ollamaTag && _ollamaModels.some(n => n === ollamaTag || n.startsWith(ollamaTag.split(':')[0] + ':'));
+    if (inOllama) {
+        statusEl.className = 'badge badge-ok'; statusEl.textContent = 'Ready in Ollama';
+        actionEl.style.display = 'none';
+        const sel = document.getElementById('chat-model-select');
+        for (let i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === ollamaTag || sel.options[i].value.startsWith(ollamaTag.split(':')[0] + ':')) {
+                sel.selectedIndex = i; _chatModel = sel.value; break;
+            }
+        }
+    } else if (_ollamaAvailable && ollamaTag) {
+        statusEl.className = 'badge badge-warn'; statusEl.textContent = 'Not pulled yet';
+        actionEl.innerHTML = '<button class="btn btn-sm btn-green" onclick="pullSelectedModel()">Pull ' + ollamaTag + '</button><span style="color:#8b949e;font-size:.8rem;margin-left:.5rem;">Downloads the model (~2\u20138 GB)</span>';
+        actionEl.style.display = '';
+    } else if (!_ollamaAvailable) {
+        statusEl.className = 'badge badge-err'; statusEl.textContent = 'Ollama not running';
+        actionEl.innerHTML = '<span style="color:#8b949e;font-size:.85rem;">Start Ollama to chat with this model.</span>';
+        actionEl.style.display = '';
+    } else if (hfRepo && !ollamaTag) {
+        statusEl.className = 'badge badge-warn'; statusEl.textContent = 'HF-only model';
+        actionEl.innerHTML = '<span style="color:#8b949e;font-size:.85rem;">No Ollama tag. Use <a href="/workflow" style="color:var(--accent);">Workflow</a> to quantize into Ollama format.</span>';
+        actionEl.style.display = '';
+    } else { banner.style.display = 'none'; return; }
+    banner.style.display = '';
+}
+async function pullSelectedModel() {
+    const m = CyberForge.getSelected();
+    if (!m || !m.ollama_tag) return;
+    const actionEl = document.getElementById('sel-model-action');
+    actionEl.innerHTML = '<span class="spinner"></span> Pulling <strong>' + m.ollama_tag + '</strong>\u2026 this may take several minutes.';
+    try {
+        const result = await cyberPost('/action/ollama-pull', {model_name: m.ollama_tag});
+        if (result._error || result.error) {
+            actionEl.innerHTML = '<span style="color:#f85149;">Pull failed: ' + (result._error || result.error) + '</span>';
+        } else {
+            actionEl.innerHTML = '<span style="color:var(--green);">\u2713 Model pulled! Refreshing\u2026</span>';
+            setTimeout(async () => { await refreshChatModels(); }, 1000);
+        }
+    } catch(e) { actionEl.innerHTML = '<span style="color:#f85149;">Error: ' + e.message + '</span>'; }
 }
 async function checkOllamaStatus() {
     try {
         const status = await cyberGet('/action/ollama-status');
         if (!status.available) {
+            _ollamaAvailable = false;
             const banner = document.getElementById('ollama-banner');
-            document.getElementById('ollama-banner-text').textContent = ' Ollama is not running.';
+            document.getElementById('ollama-banner-text').innerHTML = ' Ollama is not running. Chat requires Ollama to serve models locally.';
             banner.style.display = '';
         } else {
+            _ollamaAvailable = true;
             document.getElementById('ollama-banner').style.display = 'none';
         }
     } catch(e) {
+        _ollamaAvailable = false;
         const banner = document.getElementById('ollama-banner');
-        document.getElementById('ollama-banner-text').textContent = ' Cannot reach Ollama.';
+        document.getElementById('ollama-banner-text').innerHTML = ' Cannot reach Ollama. <a href="https://ollama.com/download" target="_blank" style="color:var(--accent);">Install Ollama</a> and run <code>ollama serve</code>.';
         banner.style.display = '';
     }
 }
 async function startOllama() {
-    const banner = document.getElementById('ollama-banner');
-    document.getElementById('ollama-banner-text').innerHTML = ' <span class="spinner"></span> Starting Ollama...';
+    document.getElementById('ollama-banner-text').innerHTML = ' <span class="spinner"></span> Starting Ollama\u2026';
     try {
         const result = await cyberPost('/action/ollama-start');
         if (result.started) {
-            document.getElementById('ollama-banner-text').textContent = ' Ollama started! Refreshing models...';
-            banner.style.borderColor = 'var(--green)';
-            setTimeout(async () => { await refreshChatModels(); banner.style.display = 'none'; }, 2000);
+            document.getElementById('ollama-banner-text').textContent = ' Ollama started! Refreshing\u2026';
+            document.getElementById('ollama-banner').style.borderColor = 'var(--green)';
+            setTimeout(async () => { await refreshChatModels(); document.getElementById('ollama-banner').style.display = 'none'; }, 2000);
         } else {
-            document.getElementById('ollama-banner-text').textContent = ' Failed: ' + (result.error || 'Unknown error');
+            document.getElementById('ollama-banner-text').innerHTML = ' Failed: ' + (result.error || 'Unknown') + '<br><span style="color:#8b949e;font-size:.85rem;">Try <code>ollama serve</code> manually.</span>';
         }
     } catch(e) { document.getElementById('ollama-banner-text').textContent = ' Error: ' + e.message; }
 }
-// Init: load models, check Ollama
 refreshChatModels();
 document.getElementById('chat-model-select').addEventListener('change', function() { _chatModel = this.value; });
 

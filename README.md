@@ -7,23 +7,24 @@ Profile your hardware, discover and recommend models, quantize/prune/distill, be
 
 ## What It Does
 
-| Capability | Status |
-|---|---|
-| Hardware profiling (GPU, CPU, RAM, backends) | **Working** |
-| Model discovery (local Ollama + Hugging Face search) | **Working** |
-| Smart recommendation engine (task-aware, hardware-gated) | **Working** |
-| Quantization (Ollama GGUF Q4/Q5/Q8, BnB, AWQ, GPTQ) | **Working** (Ollama path fully tested) |
-| Pruning (magnitude / structured via Transformers) | **Working** (CPU + GPU) |
-| Distillation (teacher→student via Transformers) | **Working** (CPU + GPU) |
-| Model editing (rank-one ROME-style via Transformers) | **Working** (CPU + GPU) |
-| Benchmarking (latency, throughput, TTFT) | **Working** (Ollama path) |
-| Compare & report (side-by-side, HTML export) | **Working** |
-| Chat interface | **Working** (Ollama backend) |
-| Artifact lifecycle & cleanup | **Working** |
-| Backend capability detection & preflight checks | **Working** |
-| Cyber IDS pipeline (NSL-KDD, CICIDS, etc.) | **Scaffolded** — loaders wired, models not shipped |
-| LoRA / QLoRA fine-tuning | **Scaffolded** — requires `[gpu]` extras |
-| vLLM / TensorRT-LLM serving | **Scaffolded** — code present, not tested in demo |
+| Capability                                               | Status                                             |
+| -------------------------------------------------------- | -------------------------------------------------- |
+| Hardware profiling (GPU, CPU, RAM, backends)             | **Working**                                        |
+| Model discovery (local Ollama + Hugging Face search)     | **Working**                                        |
+| Smart recommendation engine (task-aware, hardware-gated) | **Working**                                        |
+| Quantization (Ollama GGUF Q4/Q5/Q8, BnB, AWQ, GPTQ)      | **Working** (Ollama path fully tested)             |
+| Pruning (magnitude / structured via Transformers)        | **Working** (CPU + GPU)                            |
+| Distillation (teacher→student via Transformers)          | **Working** (CPU + GPU)                            |
+| Model editing (rank-one ROME-style via Transformers)     | **Working** (CPU + GPU)                            |
+| Benchmarking (latency, throughput, TTFT)                 | **Working** (Ollama path)                          |
+| Compare & report (side-by-side, HTML export)             | **Working**                                        |
+| Ollama auto-start & library search                       | **Working**                                        |
+| Chat interface                                           | **Working** (Ollama backend)                       |
+| Artifact lifecycle & cleanup                             | **Working**                                        |
+| Backend capability detection & preflight checks          | **Working**                                        |
+| Cyber IDS pipeline (NSL-KDD, CICIDS, etc.)               | **Scaffolded** — loaders wired, models not shipped |
+| LoRA / QLoRA fine-tuning                                 | **Scaffolded** — requires `[gpu]` extras           |
+| vLLM / TensorRT-LLM serving                              | **Scaffolded** — code present, not tested in demo  |
 
 ## Quick Start
 
@@ -41,9 +42,9 @@ pip install -e ".[dev]"
 # 3. (Optional) GPU support
 pip install -e ".[gpu]"
 
-# 4. Install & start Ollama  (required for chat/benchmark/quantize)
+# 4. Install Ollama  (required for chat/benchmark/quantize)
 # https://ollama.com/download
-ollama serve                    # in a separate terminal
+# CyberForge will auto-start Ollama when needed.
 
 # 5. Launch CyberForge
 uvicorn apps.api.main:app --reload
@@ -57,12 +58,12 @@ See [RUNNING.md](RUNNING.md) for detailed setup instructions.
 
 All config is optional. The app ships with sensible defaults.
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
-| `HF_TOKEN` | Hugging Face token for gated model downloads | *(none — public models work without it)* |
-| `OPENROUTER_API_KEY` | Cloud inference via OpenRouter | *(none — local-only mode)* |
-| `CYBERFORGE_CONFIG_DIR` | Where to store `config.yaml` | `data` |
+| Variable                | Purpose                                      | Default                                  |
+| ----------------------- | -------------------------------------------- | ---------------------------------------- |
+| `OLLAMA_HOST`           | Ollama server URL                            | `http://localhost:11434`                 |
+| `HF_TOKEN`              | Hugging Face token for gated model downloads | *(none — public models work without it)* |
+| `OPENROUTER_API_KEY`    | Cloud inference via OpenRouter               | *(none — local-only mode)*               |
+| `CYBERFORGE_CONFIG_DIR` | Where to store `config.yaml`                 | `data`                                   |
 
 Copy `.env.example` → `.env` to set these.
 

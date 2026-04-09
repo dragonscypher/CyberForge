@@ -150,7 +150,7 @@ class PruneRequest(BaseModel):
 
 @router.post("/prune", response_model=PruneResult)
 async def prune_model_endpoint(req: PruneRequest, request: Request):
-    """Prune a model to reduce size while preserving quality (OPT-011)."""
+    """Prune a model to reduce size while preserving quality."""
     method_map = {
         "magnitude": PruneMethod.MAGNITUDE,
         "l1_structured": PruneMethod.L1_STRUCTURED,
@@ -179,7 +179,7 @@ async def suggest_pruning_endpoint(req: PruneSuggestRequest, request: Request):
     return suggest_pruning(req.params_b, vram, target)
 
 
-# ── Iterative Pruning (OPT-011b) ────────────────────────────────
+# ── Iterative Pruning ──────────────────────────────────────────
 
 class IterativePruneRequest(BaseModel):
     source_model: str
@@ -194,10 +194,10 @@ class IterativePruneRequest(BaseModel):
 
 @router.post("/prune/iterative", response_model=IterativePruneResult)
 async def iterative_prune_endpoint(req: IterativePruneRequest, request: Request):
-    """Iterative pruning with quality verification at each step (OPT-011b).
+    """Iterative pruning with quality verification at each sparsity step.
 
-    Inspired by verify-loop pattern: sweeps sparsity from start to end,
-    measures perplexity at each step, stops when quality degrades beyond threshold.
+    Sweeps sparsity from start to end, measures perplexity at each step,
+    stops when quality degrades beyond threshold.
     """
     method_map = {
         "magnitude": PruneMethod.MAGNITUDE,
@@ -217,7 +217,7 @@ async def iterative_prune_endpoint(req: IterativePruneRequest, request: Request)
     return await iterative_prune(config)
 
 
-# ── Distillation (OPT-013) ──────────────────────────────────────
+# ── Distillation ────────────────────────────────────────────────
 
 @router.get("/distill/methods")
 async def get_distill_methods():
@@ -241,7 +241,7 @@ class DistillRequest(BaseModel):
 
 @router.post("/distill", response_model=DistillResult)
 async def distill_model_endpoint(req: DistillRequest, request: Request):
-    """Distill knowledge from a teacher model to a smaller student (OPT-013)."""
+    """Distill knowledge from a teacher model to a smaller student."""
     method_map = {
         "logit": DistillMethod.LOGIT,
         "hidden": DistillMethod.HIDDEN,
@@ -298,7 +298,7 @@ class EditRequest(BaseModel):
 
 @router.post("/edit", response_model=EditResult)
 async def edit_model_endpoint(req: EditRequest, request: Request):
-    """Perform surgical model edits — layer removal, weight merging, etc (OPT-014)."""
+    """Perform surgical model edits — layer removal, weight merging, etc."""
     op_map = {
         "layer_remove": EditOperation.LAYER_REMOVE,
         "weight_merge": EditOperation.WEIGHT_MERGE,

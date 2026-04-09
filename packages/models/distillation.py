@@ -1,14 +1,6 @@
 """Knowledge distillation — transfer knowledge from a teacher model to a smaller student.
 
-Inspired by openclaude's simplify pattern (parallel review → fix) applied as
-teacher → student knowledge transfer with iterative quality verification.
-
-Supports:
-  - Logit distillation (KL divergence between teacher/student logits)
-  - Hidden-state distillation (MSE between intermediate representations)
-  - Progressive distillation (iterative with quality gates)
-
-Ticket: OPT-013
+Methods: logit (KL divergence), hidden-state (MSE), progressive (iterative with quality gates).
 """
 
 from __future__ import annotations
@@ -26,18 +18,15 @@ from pydantic import BaseModel
 
 log = logging.getLogger(__name__)
 
-# Security: allowlist for model identifiers (HF repo ids or local paths)
 _MODEL_ID_RE = re.compile(r'^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)?$')
 
 def _safe_name(model_id: str) -> str:
-    """Sanitize model id to a safe filesystem component. Prevents path traversal."""
+    """Sanitize model id to a safe filesystem component."""
     base = model_id.replace('/', '_').replace('\\', '_')
-    # Strip leading dots and any path separator tricks
     base = re.sub(r'[^A-Za-z0-9._-]', '_', base).strip('.')
     return base or 'model'
 
 def _trust_remote() -> bool:
-    """Check if trust_remote_code is allowed via env var (default: False for safety)."""
     return os.environ.get('CYBERFORGE_TRUST_REMOTE_CODE', '0') in ('1', 'true', 'yes')
 
 
@@ -144,8 +133,7 @@ def list_distill_methods() -> list[dict[str, Any]]:
             "name": "Progressive Distillation",
             "description": (
                 "Iterative approach: starts with logit distillation, adds hidden-state "
-                "alignment, verifies quality at each stage. Stops when quality threshold "
-                "is met or max steps reached. Inspired by verify-loop patterns."
+                "alignment, verifies quality at each stage."
             ),
             "recommended_temperature": "2.0",
             "recommended_alpha": "0.5",
@@ -158,26 +146,14 @@ def suggest_distillation(
     vram_mb: int,
     target_compression: float = 0.5,
 ) -> dict[str, Any]:
-    """Suggest a distillation configuration given hardware constraints.
-
-    Args:
-        teacher_params_b: Teacher model size in billions of params.
-        vram_mb: Available VRAM in MB.
-        target_compression: Desired size ratio (student/teacher), 0.0-1.0.
-
-    Returns:
-        Dict with recommended student size, method, and feasibility.
-    """
+    """Suggest a distillation configuration given hardware constraints."""
     teacher_fp16_mb = int(teacher_params_b * 2000 * 1.15)
     student_params_b = teacher_params_b * target_compression
     student_fp16_mb = int(student_params_b * 2000 * 1.15)
 
-    # Both models need to fit (teacher in eval, student in train)
-    # Teacher: ~fp16 size, Student: ~fp16 * 3 (model + optimizer + gradients)
-    combined_vram = teacher_fp16_mb + student_fp16_mb * 3
+    combined_vram = teacher_fp16_mb + student_fp16_mb * 3  # model + optimizer + gradients
 
     fits_gpu = combined_vram <= vram_mb
-    fits_cpu = True  # CPU always works, just slow
 
     if fits_gpu:
         device = "cuda"
@@ -195,7 +171,6 @@ def suggest_distillation(
             f"Will run on CPU. Consider a smaller student or quantized teacher."
         )
 
-    # Recommend student models based on size
     student_suggestions = []
     if student_params_b <= 0.5:
         student_suggestions = ["distilgpt2", "sshleifer/tiny-gpt2"]
@@ -246,7 +221,6 @@ def _prepare_dataset(config: DistillConfig, tokenizer) -> list:
             text = f.read()
 
     if not text.strip():
-        # Default: use a small generic text for demo purposes
         text = (
             "The model learns to predict the next token in a sequence. "
             "Knowledge distillation transfers understanding from a larger teacher "
@@ -258,7 +232,6 @@ def _prepare_dataset(config: DistillConfig, tokenizer) -> list:
             "nodes, each applying learned transformations to their inputs. "
         ) * 20  # Repeat to get enough training data
 
-    # Tokenize into chunks
     tokens = tokenizer(text, return_tensors="pt", truncation=False)["input_ids"][0]
     chunks = []
     for i in range(0, len(tokens) - config.max_length, config.max_length // 2):
@@ -285,7 +258,6 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
             duration_seconds=round(time.time() - start, 2),
         )
 
-    # Resolve Ollama tags to HF repo IDs
     resolved_teacher = _resolve_hf_repo(config.teacher_model)
     resolved_student = _resolve_hf_repo(config.student_model)
 
@@ -308,7 +280,6 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
             duration_seconds=round(time.time() - start, 2),
         )
 
-    # Resolve device
     if config.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     else:
@@ -336,7 +307,6 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        # Load teacher (eval mode, no gradients)
         teacher = AutoModelForCausalLM.from_pretrained(
             resolved_teacher,
             token=hf_token,
@@ -352,7 +322,6 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
 
         teacher_params = sum(p.numel() for p in teacher.parameters())
 
-        # Load student (train mode)
         student = AutoModelForCausalLM.from_pretrained(
             resolved_student,
             token=hf_token,
@@ -367,22 +336,17 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
         student_params = sum(p.numel() for p in student.parameters())
         compression = student_params / teacher_params if teacher_params > 0 else 0
 
-        # Prepare data
         chunks = _prepare_dataset(config, tokenizer)
         log.info("Prepared %d training chunks of length %d", len(chunks), config.max_length)
 
-        # Optimizer
         optimizer = torch.optim.AdamW(
             student.parameters(), lr=config.learning_rate, weight_decay=0.01,
         )
 
-        # Eval text for perplexity
         eval_text = (config.dataset_text or "The model processes sequences of tokens.")[:512]
 
-        # Teacher perplexity baseline
         teacher_ppl = _compute_perplexity(teacher, tokenizer, eval_text, device, config.max_length)
 
-        # Training loop
         total_loss = 0.0
         step = 0
 
@@ -403,9 +367,7 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
                 student_logits = student_out.logits
                 student_loss = student_out.loss
 
-                # Distillation loss
                 if config.method in (DistillMethod.LOGIT, DistillMethod.PROGRESSIVE):
-                    # KL divergence on softened logits
                     T = config.temperature
                     teacher_soft = F.log_softmax(teacher_logits / T, dim=-1)
                     student_soft = F.log_softmax(student_logits / T, dim=-1)
@@ -419,13 +381,10 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
                         reduction="batchmean",
                     ) * (T * T)
                 elif config.method == DistillMethod.HIDDEN:
-                    # MSE on last hidden state
                     with torch.no_grad():
                         teacher_hidden = teacher_out.hidden_states[-1] if hasattr(teacher_out, 'hidden_states') and teacher_out.hidden_states else teacher_logits
                     student_hidden = student_out.hidden_states[-1] if hasattr(student_out, 'hidden_states') and student_out.hidden_states else student_logits
-                    # Project if dimensions differ
                     if teacher_hidden.size(-1) != student_hidden.size(-1):
-                        # Just use logit distillation as fallback
                         T = config.temperature
                         teacher_soft = F.log_softmax(teacher_logits / T, dim=-1)
                         student_soft = F.log_softmax(student_logits / T, dim=-1)
@@ -441,7 +400,6 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
                 else:
                     distill_loss = torch.tensor(0.0, device=device)
 
-                # Combined loss
                 loss = config.alpha * distill_loss + (1 - config.alpha) * student_loss
 
                 optimizer.zero_grad()
@@ -458,14 +416,12 @@ def _distill_sync(config: DistillConfig) -> DistillResult:
             if step >= config.max_steps:
                 break
 
-        # Final eval
         student.eval()
         student_ppl = _compute_perplexity(student, tokenizer, eval_text, device, config.max_length)
         ppl_ratio = student_ppl / teacher_ppl if teacher_ppl > 0 else float("inf")
 
         avg_loss = total_loss / max(step, 1)
 
-        # Save student
         student.save_pretrained(str(out_dir))
         tokenizer.save_pretrained(str(out_dir))
 

@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Optional
 
 import psutil
-
 from pydantic import BaseModel, Field
 
 from packages.cyber.verifiers import SigmaVerifier
@@ -94,14 +93,18 @@ class BenchmarkHarness:
         return card
 
     async def compare(self, baseline: BenchmarkCard, optimized: BenchmarkCard) -> dict[str, Any]:
+        mode = _detect_compare_mode(baseline, optimized)
         return {
+            "compare_mode": mode,
             "baseline": {
                 "model_id": baseline.model_id,
                 "label": baseline.label,
+                "task_mode": baseline.task_mode,
             },
             "optimized": {
                 "model_id": optimized.model_id,
                 "label": optimized.label,
+                "task_mode": optimized.task_mode,
             },
             "deltas": {
                 "latency_ms": _metric_delta(baseline.system.latency_ms, optimized.system.latency_ms, lower_is_better=True),
@@ -123,6 +126,11 @@ class BenchmarkHarness:
                 "load_time_ms": _metric_delta(
                     baseline.system.load_time_ms,
                     optimized.system.load_time_ms,
+                    lower_is_better=True,
+                ),
+                "model_size_mb": _metric_delta(
+                    baseline.system.model_size_mb,
+                    optimized.system.model_size_mb,
                     lower_is_better=True,
                 ),
                 "exact_match": _metric_delta(
@@ -355,6 +363,35 @@ def _gpu_used_mb(profiler: HardwareProfiler | None) -> float:
     profile = profiler.profile()
     used = [max(g.vram_total_mb - g.vram_free_mb, 0) for g in profile.gpus]
     return float(sum(used))
+
+
+def _base_model_id(model_id: str) -> str:
+    """Extract the base model name, stripping quantization/optimization suffixes.
+
+    Examples:
+        qwen2.5:7b-q4_k_m  -> qwen2.5:7b
+        qwen2.5:7b          -> qwen2.5:7b
+        mistral:latest       -> mistral:latest
+    """
+    import re
+
+    # Strip common quantization suffixes appended with - or _
+    cleaned = re.sub(r'[-_](q[0-9]+[a-zA-Z_]*|fp16|fp32|int[48]|awq|gptq|gguf)$', '', model_id)
+    return cleaned
+
+
+def _detect_compare_mode(a: "BenchmarkCard", b: "BenchmarkCard") -> str:
+    """Determine whether two cards represent original-vs-optimized or model-vs-model.
+
+    Returns 'original_vs_optimized' if the base model IDs match and one card
+    has a label indicating optimization (e.g. not 'baseline').
+    Returns 'model_vs_model' otherwise.
+    """
+    base_a = _base_model_id(a.model_id)
+    base_b = _base_model_id(b.model_id)
+    if base_a == base_b:
+        return "original_vs_optimized"
+    return "model_vs_model"
 
 
 def _metric_delta(

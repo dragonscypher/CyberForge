@@ -116,7 +116,13 @@ class OllamaClient(InferenceBackend):
         payload = {"name": model_name, "insecure": insecure, "stream": False}
         async with httpx.AsyncClient(timeout=600) as c:
             r = await c.post(f"{self._base}/api/pull", json=payload)
-            r.raise_for_status()
+            if r.status_code != 200:
+                try:
+                    body = r.json()
+                    err_msg = body.get("error", r.text)
+                except Exception:
+                    err_msg = r.text
+                raise RuntimeError(f"Ollama pull failed ({r.status_code}): {err_msg}")
             return r.json()
 
     async def create(

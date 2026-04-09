@@ -2,12 +2,12 @@
 
 ## Prerequisites
 
-| Requirement | Version | Notes |
-|---|---|---|
-| Python | 3.10+ | 3.12 recommended |
-| Ollama | Any recent | Required for chat, benchmark, and GGUF quantization |
-| NVIDIA GPU | Optional | CPU-only mode works; GPU accelerates quantization/training |
-| OS | Windows 10+, Linux, macOS | Tested on Windows; Linux/macOS should work |
+| Requirement | Version                   | Notes                                                      |
+| ----------- | ------------------------- | ---------------------------------------------------------- |
+| Python      | 3.10+                     | 3.12 recommended                                           |
+| Ollama      | Any recent                | Required for chat, benchmark, and GGUF quantization        |
+| NVIDIA GPU  | Optional                  | CPU-only mode works; GPU accelerates quantization/training |
+| OS          | Windows 10+, Linux, macOS | Tested on Windows; Linux/macOS should work                 |
 
 ## Step-by-Step
 
@@ -98,13 +98,13 @@ Set it via:
 
 ## Troubleshooting
 
-| Problem | Solution |
-|---|---|
-| "Ollama not reachable" | Run `ollama serve` in another terminal |
+| Problem                      | Solution                                                                                   |
+| ---------------------------- | ------------------------------------------------------------------------------------------ |
+| "Ollama not reachable"       | Run `ollama serve` in another terminal                                                     |
 | "PyTorch CUDA not available" | Install CUDA torch: `pip install torch --index-url https://download.pytorch.org/whl/cu121` |
-| "bitsandbytes not found" | `pip install bitsandbytes` (Linux) or use WSL (Windows support is limited) |
-| Slow operations on CPU | Expected — GPU is recommended for training/distillation |
-| Port 8000 in use | `uvicorn apps.api.main:app --reload --port 8001` |
+| "bitsandbytes not found"     | `pip install bitsandbytes` (Linux) or use WSL (Windows support is limited)                 |
+| Slow operations on CPU       | Expected — GPU is recommended for training/distillation                                    |
+| Port 8000 in use             | `uvicorn apps.api.main:app --reload --port 8001`                                           |
 
 ## Running Tests
 

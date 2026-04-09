@@ -69,8 +69,8 @@ bot1/
 compsecurity.ipynb
 test.ipynb
 
-# ── Demo video ──
-demo.mp4
+# ── Videos ──
+*.mp4
 
 # ── Alembic auto-generated ──
 alembic/versions/__pycache__/

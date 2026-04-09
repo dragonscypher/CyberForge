@@ -1,4 +1,4 @@
-"""Cyber verifiers — validate generated Sigma, YARA, Suricata, KQL, ATT&CK outputs.
+"""Cyber verifiers — validate generated Sigma, YARA, Suricata, ATT&CK outputs.
 
 Milestone 4 implementation. Skeleton defines the verifier interface.
 """

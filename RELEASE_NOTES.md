@@ -68,26 +68,26 @@
 
 These features have code present but are not wired into the demo flow or require additional setup:
 
-| Feature | Status | What's Needed |
-|---|---|---|
-| Cyber IDS pipeline | Loaders + prompt packs present | Raw datasets (NSL-KDD, CICIDS) not shipped; install `[cyber]` extras |
-| LoRA / QLoRA fine-tuning | Training loops scaffolded | Install `[gpu]` extras; requires CUDA GPU |
-| vLLM serving | Client code present | Install vLLM separately; configure endpoint |
-| TensorRT-LLM serving | Client code present | Install TensorRT-LLM; configure endpoint |
-| OpenRouter cloud inference | Client code present | Set `OPENROUTER_API_KEY` |
-| Cyber verifiers (YARA, Sigma, Suricata) | Prompt packs + verifier stubs | Not yet integrated into scoring |
+| Feature                                 | Status                         | What's Needed                                                        |
+| --------------------------------------- | ------------------------------ | -------------------------------------------------------------------- |
+| Cyber IDS pipeline                      | Loaders + prompt packs present | Raw datasets (NSL-KDD, CICIDS) not shipped; install `[cyber]` extras |
+| LoRA / QLoRA fine-tuning                | Training loops scaffolded      | Install `[gpu]` extras; requires CUDA GPU                            |
+| vLLM serving                            | Client code present            | Install vLLM separately; configure endpoint                          |
+| TensorRT-LLM serving                    | Client code present            | Install TensorRT-LLM; configure endpoint                             |
+| OpenRouter cloud inference              | Client code present            | Set `OPENROUTER_API_KEY`                                             |
+| Cyber verifiers (YARA, Sigma, Suricata) | Prompt packs + verifier stubs  | Not yet integrated into scoring                                      |
 
 ---
 
 ## System Requirements
 
-| Component | Minimum | Recommended |
-|---|---|---|
-| Python | 3.10 | 3.12 |
-| RAM | 8 GB | 16+ GB |
-| GPU | None (CPU works) | NVIDIA with 6+ GB VRAM |
-| Disk | 4 GB free | 20+ GB for multiple models |
-| Ollama | Required for demo paths | Latest version |
+| Component | Minimum                 | Recommended                |
+| --------- | ----------------------- | -------------------------- |
+| Python    | 3.10                    | 3.12                       |
+| RAM       | 8 GB                    | 16+ GB                     |
+| GPU       | None (CPU works)        | NVIDIA with 6+ GB VRAM     |
+| Disk      | 4 GB free               | 20+ GB for multiple models |
+| Ollama    | Required for demo paths | Latest version             |
 
 ---
 

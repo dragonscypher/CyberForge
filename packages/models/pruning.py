@@ -1,9 +1,6 @@
-"""Pruning module — structured and unstructured model pruning via PyTorch.
+"""Structured and unstructured model pruning via PyTorch.
 
-Supports magnitude-based, L1-structured, and random pruning strategies.
-Produces a pruned model artifact in the cache directory.
-
-Ticket: OPT-011
+Methods: magnitude, L1-structured, random.
 """
 
 from __future__ import annotations
@@ -128,11 +125,8 @@ def suggest_pruning(
             "message": f"Model fits in {target_vram_mb} MB without pruning.",
         }
 
-    # Calculate required sparsity to fit
-    # Pruning reduces effective size by ~40% of sparsity (conservative)
     required_reduction = (fp16_vram - target_vram_mb) / fp16_vram
-    # Sparsity needed: reduction / effectiveness_factor
-    needed_sparsity = min(required_reduction / 0.4, 0.9)
+    needed_sparsity = min(required_reduction / 0.4, 0.9)  # ~40% effectiveness
 
     method = "magnitude" if needed_sparsity <= 0.5 else "l1_structured"
 
@@ -166,7 +160,6 @@ def _prune_sync(config: PruneConfig) -> PruneResult:
             duration_seconds=round(time.time() - start, 2),
         )
 
-    # Resolve Ollama tags to HF repo IDs
     resolved_model = _resolve_hf_repo(config.source_model)
     if ":" in resolved_model:
         return PruneResult(
@@ -207,7 +200,6 @@ def _prune_sync(config: PruneConfig) -> PruneResult:
 
         original_params = sum(p.numel() for p in model.parameters())
 
-        # Collect layers to prune
         layers_to_prune = []
         for name, module in model.named_modules():
             if isinstance(module, torch.nn.Linear):
@@ -221,7 +213,6 @@ def _prune_sync(config: PruneConfig) -> PruneResult:
                 duration_seconds=round(time.time() - start, 2),
             )
 
-        # Apply pruning
         if config.method == PruneMethod.MAGNITUDE:
             prune_utils.global_unstructured(
                 layers_to_prune,
@@ -240,7 +231,6 @@ def _prune_sync(config: PruneConfig) -> PruneResult:
                 amount=config.sparsity,
             )
 
-        # Make permanent (remove re-parametrization)
         if config.make_permanent:
             for module, param_name in layers_to_prune:
                 try:
@@ -248,12 +238,10 @@ def _prune_sync(config: PruneConfig) -> PruneResult:
                 except ValueError:
                     pass  # Already removed
 
-        # Count zeros
         zero_params = sum(
             int((p == 0).sum().item()) for p in model.parameters()
         )
 
-        # Save
         model.save_pretrained(str(out_dir))
         tokenizer.save_pretrained(str(out_dir))
 
@@ -288,10 +276,7 @@ async def prune_model(config: PruneConfig) -> PruneResult:
     return await asyncio.to_thread(_prune_sync, config)
 
 
-# ── Iterative pruning with verification (OPT-011b) ────────────────
-# Inspired by openclaude's verify + loop skills: incrementally increase
-# sparsity, verify quality at each step, stop when threshold exceeded.
-
+# ── Iterative pruning with verification ────────────────────────
 
 class IterativePruneConfig(BaseModel):
     source_model: str
@@ -354,7 +339,6 @@ def _iterative_prune_sync(config: IterativePruneConfig) -> IterativePruneResult:
     hf_token = os.environ.get("HF_TOKEN")
     trc = _trust_remote()
 
-    # Resolve Ollama tags to HF repo IDs
     resolved_model = _resolve_hf_repo(config.source_model)
     if ":" in resolved_model:
         return IterativePruneResult(
@@ -547,9 +531,8 @@ def list_prune_methods() -> list[dict[str, Any]]:
             "id": "iterative",
             "name": "Iterative Pruning with Verification",
             "description": (
-                "Inspired by verify-loop pattern: incrementally increases sparsity, "
-                "checks perplexity at each step, stops when quality degrades beyond threshold. "
-                "Finds optimal sparsity automatically."
+                "Incrementally increases sparsity, checks perplexity at each step, "
+                "stops when quality degrades beyond threshold. Finds optimal sparsity automatically."
             ),
             "recommended_sparsity": "auto (0.1–0.7 sweep)",
             "preserves_structure": False,

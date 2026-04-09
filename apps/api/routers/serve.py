@@ -54,7 +54,10 @@ async def ollama_pull(body: PullRequest, request: Request):
     client = request.app.state.ollama
     if not await client.is_available():
         raise HTTPException(503, "Ollama is not running")
-    return await client.pull(body.model_name)
+    try:
+        return await client.pull(body.model_name)
+    except Exception as exc:
+        raise HTTPException(502, f"Ollama pull error: {exc}") from exc
 
 
 class CreateModelRequest(BaseModel):
